@@ -139,8 +139,7 @@ localparam RECV_LEN1         = 7'b0000010; // receiving length msb
 localparam RECV_LEN2         = 7'b0000100; // receiving length lsb
 localparam RECV_CMD          = 7'b0001000; // receiving command
 localparam RECV_PARAM        = 7'b0010000; // receiving parameters
-localparam RECV_RESPONSE_REQ = 7'b0100000; // sending response
-localparam RECV_RESPONSE_ACK = 7'b1000000; // waiting for response sending to finish 
+localparam RECV_RESPONSE_REQ = 7'b0100000; // post a response request to TX
 reg [6:0] recv_state = RECV_IDLE;
 
 // UART command buffer
@@ -454,21 +453,19 @@ always @(posedge clk) begin
                 endcase
             end
 
-            RECV_RESPONSE_REQ:                      // request to send config string
-                case (cmd_reg)
-                    1,2: begin                      // 1: core ID, 2: config string
-                        response_type <= cmd_reg;
-                        response_req ^= 1;
-                        recv_state <= RECV_RESPONSE_ACK;
-                    end
-                    default:
-                        recv_state <= RECV_IDLE;
-                endcase
-
-            RECV_RESPONSE_ACK:                      // wait for TX to finish
-                if (response_req == response_ack) begin
-                    recv_state <= RECV_IDLE;
+            // Post the request to TX and go straight back to listening. RX used to
+            // wait here until TX had sent the reply, deaf to the MCU meanwhile; with
+            // a 519-byte save block on the wire that is ~3 ms, and whatever the MCU
+            // sent then (the save task's next 0x12, a HID or core_config frame) was
+            // lost. A request that arrives while one is still pending is merged
+            // into it: the one reply answers both.
+            RECV_RESPONSE_REQ: begin                // 1: core ID, 2: config string
+                if ((cmd_reg == 1 || cmd_reg == 2) && response_req == response_ack) begin
+                    response_type <= cmd_reg;
+                    response_req <= ~response_req;
                 end
+                recv_state <= RECV_IDLE;
+            end
         endcase
         
     end
@@ -539,20 +536,6 @@ always @(posedge clk) begin
                     send_state_next <= SEND_JOYPAD;
                     send_state <= SEND_HEADER;
                     resp_frame_len <= 5;
-                end else if (SAVE_IF && sv_rd_req != sv_rd_ack) begin
-                    send_state_next <= SEND_SAVE_BLK;
-                    send_state <= SEND_HEADER;
-                    resp_frame_len <= 1 + 2 + 512;          // type + blk16 + data
-                    sv_raddr <= {sv_req_blk[7:0], 9'd0};    // base of the dump read
-                    sv_idx <= 0;
-                    if (!SAVE_SYNC)
-                        sv_rd_stb <= 1;                     // engine: fetch byte 0
-                    if (sv_req_blk == 0 && !sv_core_we)
-                        sv_dirty <= 0;                      // dump starting: clean again
-                end else if (SAVE_IF && sv_notify) begin
-                    send_state_next <= SEND_SAVE_DIRTY;
-                    send_state <= SEND_HEADER;
-                    resp_frame_len <= 2;                    // type + one pad byte
                 end else if (fdd_request[1] && fdd_state == FDD_READY) begin
                     send_state_next <= SEND_FDD_WRITE;
                     send_state <= SEND_HEADER;
@@ -573,6 +556,25 @@ always @(posedge clk) begin
                         send_state <= SEND_HEADER;
                         resp_frame_len <= 2;
                     end
+                // Save traffic goes last. The MCU asks for the next block as soon as
+                // one arrives, so a save request is nearly always pending during a
+                // dump; ahead of the core-ID reply it starved the firmware's
+                // get_core_id() polls for the whole dump (128-256 blocks of ~2.9 ms
+                // on MD/SNES/GBA) whenever a joypad frame let the next 0x12 land first.
+                end else if (SAVE_IF && sv_rd_req != sv_rd_ack) begin
+                    send_state_next <= SEND_SAVE_BLK;
+                    send_state <= SEND_HEADER;
+                    resp_frame_len <= 1 + 2 + 512;          // type + blk16 + data
+                    sv_raddr <= {sv_req_blk[7:0], 9'd0};    // base of the dump read
+                    sv_idx <= 0;
+                    if (!SAVE_SYNC)
+                        sv_rd_stb <= 1;                     // engine: fetch byte 0
+                    if (sv_req_blk == 0 && !sv_core_we)
+                        sv_dirty <= 0;                      // dump starting: clean again
+                end else if (SAVE_IF && sv_notify) begin
+                    send_state_next <= SEND_SAVE_DIRTY;
+                    send_state <= SEND_HEADER;
+                    resp_frame_len <= 2;                    // type + one pad byte
                 end
             end
 
