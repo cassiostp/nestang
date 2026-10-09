@@ -365,7 +365,6 @@ GameData game_data(
 wire [7:0] overlay_x;
 wire [7:0]  overlay_y;
 wire [14:0] overlay_color;      // BGR5
-wire [31:0] core_config;        // option bits from BL616, see iosys_bl616. bit 16: scanlines
 
 // HDMI output
 nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=01100_00000_01000
@@ -392,8 +391,7 @@ iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(21_492_000), .CORE_ID(1)
     .hid1(hid1), .hid2(hid2),
     .uart_tx(UART_TXD), .uart_rx(UART_RXD),
 
-    .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid),
-    .core_config(core_config)
+    .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid)
 );
 
 // Controller input
