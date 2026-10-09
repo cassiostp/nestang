@@ -150,8 +150,8 @@ wor [11:0] joy1_btns, joy2_btns;    // SNES layout (R L X A RT LT DN UP START SE
                                     // Lower 8 bits are NES buttons
 wire [11:0] joy_usb1, joy_usb2;
 wire [11:0] hid1, hid2;             // From BL616
-wire [11:0] joy1 = joy1_btns | hid1 | joy_usb1;
-wire [11:0] joy2 = joy2_btns | hid2 | joy_usb2;
+wire [11:0] joy1 = overlay ? 12'b0 : joy1_btns | hid1 | joy_usb1;
+wire [11:0] joy2 = overlay ? 12'b0 : joy2_btns | hid2 | joy_usb2;
 
 // NES gamepad
 wire [7:0]NES_gamepad_button_state;
@@ -348,6 +348,8 @@ end
 `ifdef VERILATOR
 
 // For verilator, the only peripheral is the compiled-in game data 
+// (no OSD menu under verilator, joysticks are never blanked)
+wire overlay = 1'b0;
 GameData game_data(
     .clk(clk), .reset(~sys_resetn), .downloading(loading), 
     .odata(loader_do), .odata_clk(loader_do_valid));
