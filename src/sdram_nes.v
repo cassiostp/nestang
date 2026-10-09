@@ -62,7 +62,20 @@ module sdram_nes #(
     output reg [15:0] rv_dout,
     input             rv_req,
     output reg        rv_req_ack,   // ready for new requests. read data available on NEXT mclk
-    input             rv_we
+    input             rv_we,
+
+    // Save-RAM client: byte accesses into banks 0/1. sv_req is a toggle from the
+    // async iosys clock domain (2FF-synced here) and sv_ack toggles once per
+    // completed transaction; a level copy of req would let a mid-frame toggle
+    // steal an ack for a request that never rode a frame. Lowest priority in the
+    // CPU/PPU slot: every game request wins and this one retries later. Read
+    // data is valid by cycle[4] of the transaction frame, a few fclk after ack.
+    input      [21:0] sv_addr,      // byte address, banks 0/1
+    input       [7:0] sv_din,       // byte access, DQM selects the lane
+    input             sv_we,
+    input             sv_req,       // toggle, async to clk
+    output reg        sv_ack,       // toggle, clk domain
+    output reg  [7:0] sv_dout
 );
 
 localparam DQM_SIZE = SDRAM_DATA_WIDTH / 8;
@@ -110,6 +123,7 @@ localparam PORT_NONE  = 2'd0;
 
 localparam PORT_A     = 2'd1;   // PPU
 localparam PORT_B     = 2'd2;   // CPU
+localparam PORT_SAVE  = 2'd3;   // battery-save channel
 
 localparam PORT_RV    = 2'd1;
 
@@ -124,6 +138,16 @@ reg  [2:0] next_oe;
 reg oeA_d, oeB_d, weA_d, weB_d;
 wire reqA = (~oeA_d & oeA) || (~weA_d & weA);
 wire reqB = (~oeB_d & oeB) || (~weB_d & weB);
+
+// Save channel request: sv_req is a toggle in the (async) iosys domain.
+// One transaction per sync'ed edge; sv_req_q is the level arbitration sees.
+reg [1:0] sv_req_s = 2'b00;
+reg       sv_req_q = 1'b0;
+always @(posedge clk) begin
+    sv_req_s <= {sv_req_s[0], sv_req};
+    if (sv_req_s[1] ^ sv_req_s[0])
+        sv_req_q <= sv_req_s[0];       // s[0] holds the NEW value; s[1] is the old one
+end
 
 reg clkref_r;
 always @(posedge clk) clkref_r <= clkref;
@@ -160,7 +184,15 @@ always @(*) begin
 		next_ds[0] = {addrA[0], ~addrA[0]};
 		next_we[0] = weA;
 		next_oe[0] = oeA;
-	end 
+	end else if (sv_req_q ^ sv_ack) begin
+		// save-RAM byte access: the slot is idle anyway, no game impact
+		next_port[0] = PORT_SAVE;
+		next_addr[0] = sv_addr;
+		next_din[0] = {sv_din, sv_din};
+		next_ds[0] = {sv_addr[0], ~sv_addr[0]};
+		next_we[0] = sv_we;
+		next_oe[0] = ~sv_we;
+		end 
 end
 
 // RV: bank 2
@@ -191,6 +223,9 @@ always @(posedge clk) begin
         SDRAM_DQM <= {DQM_SIZE{1'b1}};
         normal <= 0;
         setup <= 0;
+        sv_ack <= 0;
+        sv_req_s <= 2'b00;
+        sv_req_q <= 1'b0;
     end else begin
         // defaults
         dq_oen <= 1'b1;
@@ -279,6 +314,11 @@ always @(posedge clk) begin
                 end
             end
 
+            // Save-RAM ack: its transaction rode the CPU/PPU slot; CAS is cycle[1],
+            // so by cycle[2] the request is on the wire and a new one is allowed.
+            // Toggle (not copy) so two req edges can never collapse into one ack.
+            if (cycle[2] && port[0] == PORT_SAVE) sv_ack <= ~sv_ack;
+
             // CAS
             // CPU, PPU
             if (cycle[1] && (oe_latch[0] || we_latch[0])) begin
@@ -345,6 +385,7 @@ always @(posedge clk) begin
                 case (port[0])
                 PORT_A: doutA <= dq_byte;
                 PORT_B: doutB <= dq_byte;
+                PORT_SAVE: sv_dout <= dq_byte;
                 default: ;
                 endcase
             end
