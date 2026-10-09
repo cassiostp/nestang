@@ -183,7 +183,7 @@ initial begin
     for (k = 0; k < 512; k = k + 1) sv_read(WRAM + k[21:0], pat(k));
 
     if (errs == 0) $display("tb_sdram_save: PASS");
-    else $display("tb_sdram_save: FAIL, %0d errors", errs);
+    else $fatal(1, "tb_sdram_save: FAIL, %0d errors", errs);
     $finish;
 end
 

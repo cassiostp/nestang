@@ -1,2 +1,3 @@
 *.out
+*.vcd
 *_sim.v
