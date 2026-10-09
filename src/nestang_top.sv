@@ -121,6 +121,9 @@ wire loading;                 // from iosys or game_data
 wire [7:0] loader_do;
 wire loader_do_valid;
 
+wire [31:0] core_config;      // from iosys
+wire pause = core_config[17]; // freeze the machine while the game menu is open
+
 // iosys softcore
 wire        rv_valid;
 reg         rv_ready;
@@ -236,7 +239,7 @@ wire [31:0] status;
 
 // Main NES machine
 NES nes(
-    .clk(clk), .reset_nes(reset_nes), .cold_reset(1'b0),
+    .clk(clk), .reset_nes(reset_nes), .cold_reset(1'b0), .pause(pause),
     .sys_type(system_type), .nes_div(nes_ce),
     .mapper_flags(mapper_flags),
     .sample(sample), .color(color),
@@ -366,7 +369,7 @@ wire [14:0] overlay_color;      // BGR5
 nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=01100_00000_01000
     .clk(clk), .resetn(sys_resetn),
     .color(color), .cycle(cycle), 
-    .scanline(scanline), .sample(sample >> 1),
+    .scanline(scanline), .sample(pause ? 16'd0 : (sample >> 1)),  // silent while paused
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y),
     .overlay_color(overlay_color),
     .clk_pixel(hclk), .clk_5x_pixel(hclk5),
@@ -381,6 +384,7 @@ iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(21_492_000), .CORE_ID(1)
     .clk(clk), .hclk(hclk), .resetn(sys_resetn),
 
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
+    .core_config(core_config),
     .joy1(joy1_btns | joy_usb1), .joy2(joy2_btns | joy_usb2),
     .hid1(hid1), .hid2(hid2),
     .uart_tx(UART_TXD), .uart_rx(UART_RXD),
