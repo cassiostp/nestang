@@ -13,7 +13,7 @@ module nes2hdmi (
     input [8:0] scanline,
     input [15:0] sample,
     input aspect_8x7,       // 1: 8x7 pixel aspect ratio mode
-    input scanlines,        // 1: dim odd lines to ~25% (core_config[16])
+    input scanlines,        // 1: darken every 3rd output line of a source line (core_config[16])
 
     // overlay interface
     input overlay,
@@ -150,6 +150,7 @@ reg [$clog2(HEIGHT)-1:0] yy /* xsynthesis syn_keep=1 */;
 reg [10:0] xcnt             /* xsynthesis syn_keep=1 */;
 reg [10:0] ycnt             /* xsynthesis syn_keep=1 */;                  // fractional scaling counters
 reg [9:0] cy_r;
+reg [1:0] line_in_group;        // output line index (0..) within one source line's group
 reg scanlines_r, scanlines_rr;  // scanlines synchronized to the pixel clock domain
 
 always @(posedge clk_pixel) begin
@@ -195,7 +196,9 @@ always @(posedge clk_pixel) begin
         if (ycnt_next >= 720) begin
             ycnt <= ycnt_next - 720;
             yy <= yy + 1;
-        end
+            line_in_group <= 0;         // start of a new source line
+        end else if (line_in_group != 2'd2)
+            line_in_group <= line_in_group + 1;
     end
 
     if (cx == 0) begin
@@ -206,6 +209,7 @@ always @(posedge clk_pixel) begin
     if (cy == 0) begin
         yy <= 0;
         ycnt <= 0;
+        line_in_group <= 0;
     end 
 
 end
@@ -219,8 +223,8 @@ always @(posedge clk_pixel) begin
             pixel = {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};      // BGR5 to RGB8
         else
             pixel = NES_PALETTE[mem_portB_rdata];
-        if (~overlay & scanlines_rr & yy[0])   // scanlines: dim odd lines to ~25%
-            pixel = pixel - {1'b0, pixel[23:1]} - {2'b0, pixel[23:2]};
+        if (~overlay & scanlines_rr & line_in_group == 2'd2)   // scanlines: darken the 3rd output line of each source line to ~50%
+            pixel = {pixel[23:1], 1'b0, pixel[15:1], 1'b0, pixel[7:1], 1'b0};
         rgb <= pixel;
     end else
         rgb <= 24'h303030;
