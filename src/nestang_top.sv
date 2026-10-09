@@ -384,7 +384,7 @@ nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=
     .scanline(scanline), .sample(pause ? 16'd0 : (sample >> 1)),  // silent while paused
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y),
     .overlay_color(overlay_color),
-    .scanlines(core_config[16]),
+    .scanlines(core_config[16]), .sl_darkness(core_config[19:18]), .sl_thick(core_config[20]), .sl_out(core_config[21]),
     .clk_pixel(hclk), .clk_5x_pixel(hclk5),
     .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p),
     .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)

@@ -51,6 +51,7 @@
         <File path="src/nano20k/gowin_pll_nes.v" type="file.verilog" enable="1"/>
         <File path="src/nes.v" type="file.verilog" enable="1"/>
         <File path="src/nes2hdmi.sv" type="file.verilog" enable="1"/>
+        <File path="src/scanlines.v" type="file.verilog" enable="1"/>
         <File path="src/nestang_top.sv" type="file.verilog" enable="1"/>
         <File path="src/ppu.v" type="file.verilog" enable="1"/>
         <File path="src/sdram_nes.v" type="file.verilog" enable="1"/>
