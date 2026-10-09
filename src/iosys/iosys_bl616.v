@@ -450,7 +450,6 @@ always @(posedge clk) begin
                     send_idx <= send_idx + 1;
                     if (send_idx == 3) begin
                         send_state <= SEND_IDLE;
-                        response_ack <= response_req;
                     end
                 end
             end
@@ -473,7 +472,6 @@ always @(posedge clk) begin
                     send_idx <= send_idx + 1;
                     if (send_idx == 511+2) begin
                         send_state <= SEND_DONE;
-                        response_ack <= response_req;
                         fdd_write_finish <= 1;              // notify FDD state machine
                     end
                 end
@@ -491,7 +489,6 @@ always @(posedge clk) begin
                     send_idx <= send_idx + 1;
                     if (send_idx == 1) begin
                         send_state <= SEND_DONE;
-                        response_ack <= response_req;
                         fdd_read_start <= 1;                // notify FDD state machine
                     end
                 end
