@@ -359,6 +359,7 @@ wire overlay;                   // iosys controls overlay
 wire [7:0] overlay_x;
 wire [7:0]  overlay_y;
 wire [14:0] overlay_color;      // BGR5
+wire [31:0] core_config;        // option bits from BL616, see iosys_bl616. bit 16: scanlines
 
 // HDMI output
 nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=01100_00000_01000
@@ -367,6 +368,7 @@ nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=
     .scanline(scanline), .sample(sample >> 1),
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y),
     .overlay_color(overlay_color),
+    .scanlines(core_config[16]),
     .clk_pixel(hclk), .clk_5x_pixel(hclk5),
     .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p),
     .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
@@ -383,7 +385,8 @@ iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(21_492_000), .CORE_ID(1)
     .hid1(hid1), .hid2(hid2),
     .uart_tx(UART_TXD), .uart_rx(UART_RXD),
 
-    .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid)
+    .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid),
+    .core_config(core_config)
 );
 
 // Controller input
