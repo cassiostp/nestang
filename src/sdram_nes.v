@@ -144,9 +144,14 @@ wire reqB = (~oeB_d & oeB) || (~weB_d & weB);
 reg [1:0] sv_req_s = 2'b00;
 reg       sv_req_q = 1'b0;
 always @(posedge clk) begin
-    sv_req_s <= {sv_req_s[0], sv_req};
-    if (sv_req_s[1] ^ sv_req_s[0])
-        sv_req_q <= sv_req_s[0];       // s[0] holds the NEW value; s[1] is the old one
+    if (!resetn) begin
+        sv_req_s <= 2'b00;
+        sv_req_q <= 1'b0;
+    end else begin
+        sv_req_s <= {sv_req_s[0], sv_req};
+        if (sv_req_s[1] ^ sv_req_s[0])
+            sv_req_q <= sv_req_s[0];       // s[0] holds the NEW value; s[1] is the old one
+    end
 end
 
 reg clkref_r;
@@ -223,9 +228,7 @@ always @(posedge clk) begin
         SDRAM_DQM <= {DQM_SIZE{1'b1}};
         normal <= 0;
         setup <= 0;
-        sv_ack <= 0;
-        sv_req_s <= 2'b00;
-        sv_req_q <= 1'b0;
+        sv_ack <= 0;            // sv_req_s/sv_req_q reset in their own always block
     end else begin
         // defaults
         dq_oen <= 1'b1;
