@@ -15,7 +15,8 @@ COSIM := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 RTL := $(COSIM)/../../src
 GEN := $(COSIM)/build/gen
 OBJ := $(COSIM)/build/obj
-DOCKER := docker run --rm --user "$(shell id -u):$(shell id -g)"
+# The container user may have no writable home (CI runners): no ccache.
+DOCKER := docker run --rm --user "$(shell id -u):$(shell id -g)" -e CCACHE_DISABLE=1
 VMOUNT := -v "$(COSIM)/../..:/coresim-src:ro" -v "$(COSIM)/build:/coresim-build" -w /coresim-build
 VERILATOR := $(DOCKER) $(VMOUNT) verilator/verilator:latest
 IVERILOG := $(DOCKER) -v "$(COSIM)/../..:/coresim-src:ro" -v "$(COSIM)/build:/coresim-build" -w /coresim-build tangcore-iv:1
