@@ -17,11 +17,17 @@
 // rows are evenly spaced, but they beat against content that isn't scaled by
 // exactly `rows`.
 //
+// The LCD grid (video_fx.v) needs the integer scale too: with cfg_grid set
+// the frame uses it even when the scanlines are off or in output rows mode,
+// and `last` marks the last output row of every source line. The scanline
+// darkening is not affected.
+//
 // sl_rows follows the output row (cy) and says, for the row being drawn,
-// which source line it shows, whether it is inside the picture and whether it
-// is a dark row. sl_dim darkens one pixel. The settings are latched at the
-// start of every frame, so a frame never mixes two geometries, except `hide`
-// (the menu is up), which the scaler also looks at directly.
+// which source line it shows, whether it is inside the picture, whether it
+// is a dark row and whether it is the last row of its source line. sl_dim
+// darkens one pixel. The settings are latched at the start of every frame, so
+// a frame never mixes two geometries, except `hide` (the menu is up), which
+// the scaler also looks at directly.
 
 module sl_rows (
     input            clk,           // pixel clock, 74.25 MHz
@@ -32,7 +38,8 @@ module sl_rows (
     input      [1:0] cfg_dark,      // [19:18]
     input            cfg_thick,     // [20]
     input            cfg_out,       // [21]
-    input            hide,          // 1: no scanlines (the menu is up)
+    input            cfg_grid,      // video_config[15]: LCD grid on, wants the integer scale
+    input            hide,          // 1: no scanlines, no grid geometry (the menu is up)
 
     // the picture, sampled at the start of every frame
     input      [2:0] rows,          // output rows per source line
@@ -46,13 +53,14 @@ module sl_rows (
     output reg [7:0] yy,            // geom: source line shown by this output row
     output           show,          // 1: this output row shows the picture (always 1 unless geom)
     output           dark,          // 1: this output row is darkened
+    output           last,          // geom: this output row is the last of its source line
     output reg [1:0] darkness       // synchronised cfg_dark
 );
 
     // synchronise the config bits to the pixel clock
-    reg [5:0] cfg_a, cfg_b;
+    reg [6:0] cfg_a, cfg_b;
     always @(posedge clk) begin
-        cfg_a <= {hide, cfg_out, cfg_thick, cfg_dark, cfg_on};
+        cfg_a <= {cfg_grid, hide, cfg_out, cfg_thick, cfg_dark, cfg_on};
         cfg_b <= cfg_a;
         darkness <= cfg_b[2:1];
     end
@@ -60,7 +68,9 @@ module sl_rows (
     wire s_thick = cfg_b[3];
     wire s_out   = cfg_b[4];
     wire s_hide  = cfg_b[5];
+    wire s_grid  = cfg_b[6];
 
+    reg       smode;                // this frame darkens the rows of the integer scale
     reg       omode;                // this frame darkens output rows
     reg       in_pic;               // geom: the output row is inside the picture
     reg [2:0] rows_l;               // `rows` of this frame
@@ -74,7 +84,8 @@ module sl_rows (
     always @(posedge clk) begin
         cy0_r <= cy[0];
         if (cy == 10'd0) begin      // the first row: take the settings for this frame
-            geom    <= s_on & ~s_out & ~s_hide;
+            geom    <= (s_on & ~s_out | s_grid) & ~s_hide;
+            smode   <= s_on & ~s_out & ~s_hide;
             omode   <= s_on &  s_out & ~s_hide;
             rows_l  <= rows;
             dstart  <= rows - (s_thick ? dark_thick : dark_thin);
@@ -105,7 +116,8 @@ module sl_rows (
 
     assign pic_top = geom ? top_l : 10'd0;
     assign show    = ~geom | in_pic;
-    assign dark    = (geom & in_pic & (rcnt >= dstart)) | (omode & (orow >= dstart));
+    assign dark    = (smode & in_pic & (rcnt >= dstart)) | (omode & (orow >= dstart));
+    assign last    = geom & in_pic & (rcnt == rows_l - 3'd1);
 
 endmodule
 
