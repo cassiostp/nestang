@@ -189,7 +189,7 @@ wire [11:0] XSTOP  = (12'd1280 + XSIZE) >> 1;
 // video_fx follows rgb_pre with FX_LAT register stages. Its first stage is the one that sl_dim
 // used to be (active started at XSTART - 2 then), so active starts FX_LAT - 1 clocks earlier
 // than that, at XSTART - 1 - FX_LAT. The xx/xcnt counters, and so the overlay lookup, run with it.
-localparam FX_LAT = 10;     // clocks from rgb_pre to rgb, see video_fx.v
+localparam FX_LAT = 11;     // clocks from rgb_pre to rgb, see video_fx.v
 always @(posedge clk_pixel) begin
     reg active_t;
     reg [10:0] xcnt_next;

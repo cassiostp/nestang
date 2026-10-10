@@ -9,7 +9,7 @@
 
 module tb_nes_fx;
 
-    localparam FX_LAT = 10;
+    localparam FX_LAT = 11;
 
     reg clk_pixel = 0, clk = 0;
     always #6.734 clk_pixel = ~clk_pixel;       // 74.25 MHz

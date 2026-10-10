@@ -13,7 +13,7 @@
 //   [17:16] grid strength: the grid pixels lose 1/8, 1/4, 3/8, 1/2
 //   [19:18] reserved (smoothing)
 //   [31:20] reserved
-// All zero = no change: the output is then bit-identical to the input, FX_LAT (10)
+// All zero = no change: the output is then bit-identical to the input, FX_LAT (11)
 // clocks later. So is any word with brightness, contrast, saturation, gamma, mask
 // type and grid all 0, whatever the strengths say.
 //
@@ -64,7 +64,7 @@ module video_fx (
     output [23:0] rgb_out           // FX_LAT clocks after rgb_in
 );
 
-    localparam FX_LAT = 10;         // 8 colour stages, sl_dim, grid/mask
+    localparam FX_LAT = 11;         // 8 colour stages, sl_dim, grid/mask, output register
 
     // settings: synchronised to the pixel clock, latched at the start of every frame
     reg [17:0] cfg_a, cfg_b;
@@ -168,10 +168,10 @@ module video_fx (
     sl_dim dim (.clk(clk), .rgb_in(rgb_c), .dark(dark_d[8]), .darkness(darkness), .rgb_out(rgb_d));
 
     // Grid and mask factors in 1/64, registered next to the dimmed pixel (clock 9).
-    // They are computed for the pixel that will be output two clocks later, x = cx + MASK_LEAD:
+    // They are computed for the pixel that will be output three clocks later, x = cx + MASK_LEAD:
     // p3 = x mod 3 and trd = (x div 3) mod 2 count along cx, restarted on the first column
     // of a row (the clock after it holds x = 1 + MASK_LEAD).
-    localparam MASK_LEAD = 2;
+    localparam MASK_LEAD = 3;
     localparam P3_0  = (1 + MASK_LEAD) % 3;
     localparam TRD_0 = ((1 + MASK_LEAD) / 3) % 2;
     reg [1:0] p3;
@@ -206,7 +206,12 @@ module video_fx (
         out_g <= rgb_d[15:8]  * fac_g;
         out_b <= rgb_d[7:0]   * fac_b;
     end
-    assign rgb_out = {out_r[13:6], out_g[13:6], out_b[13:6]};
+    // 11: the output register. It keeps the multipliers (DSP blocks) away from
+    // the hdmi module's TMDS encoders, which would otherwise be one path.
+    reg [23:0] rgb_q;
+    always @(posedge clk)
+        rgb_q <= {out_r[13:6], out_g[13:6], out_b[13:6]};
+    assign rgb_out = rgb_q;
 
 endmodule
 
