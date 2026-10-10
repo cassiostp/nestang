@@ -89,7 +89,6 @@ wire famicon_kbd = 0;
 wire [3:0] palette_osd = 0;
 wire [2:0] diskside_osd = 0;
 wire blend = 0;
-wire bk_save = 0;
 
 // NES signals
 reg reset_nes = 1;
@@ -123,6 +122,15 @@ wire loader_do_valid;
 
 wire [31:0] core_config;      // from iosys
 wire pause = core_config[17]; // freeze the machine while the game menu is open
+
+// Battery saves (see iosys_bl616.v): WRAM writes seen by the CPU dirty the save.
+wire save_written;
+wire [12:0] sv_addr;
+wire [7:0] sv_din, sv_q;
+wire sv_we, sv_req, sv_ack;
+`ifdef VERILATOR
+assign sv_req = 1'b0;     // no iosys in the Verilator sim: keep the save channel quiet
+`endif
 
 // iosys softcore
 wire        rv_valid;
@@ -267,7 +275,7 @@ NES nes(
     .int_audio(int_audio),    // VRC6
     .ext_audio(ext_audio),
 
-    .apu_ce(), .gg(), .gg_code(), .gg_avail(), .gg_reset(), .emphasis(), .save_written()
+    .apu_ce(), .gg(), .gg_code(), .gg_avail(), .gg_reset(), .emphasis(), .save_written(save_written)
 );
 
 // loader_write -> clock when data available
@@ -316,6 +324,9 @@ sdram_nes sdram (
     .rv_addr({rv_addr[20:2], rv_word}), .rv_din(rv_word ? rv_wdata[31:16] : rv_wdata[15:0]), 
     .rv_ds(rv_ds), .rv_dout(rv_dout), .rv_req(rv_req), .rv_req_ack(rv_req_ack), .rv_we(rv_wstrb != 0)
 `endif
+    // Battery save-RAM: the same 8 KB the mappers route to linear 0x3C0000
+    , .sv_addr({9'b11_1100_000, sv_addr}), .sv_din(sv_din), .sv_we(sv_we),
+    .sv_req(sv_req), .sv_ack(sv_ack), .sv_dout(sv_q)
 );
 
 // ROM parser
@@ -381,7 +392,8 @@ nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=
 
 
 // Connect to BL616 companion MCU for sys module for menu, rom loading...
-iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(21_492_000), .CORE_ID(1) )     // purple nestang logo
+iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(21_492_000), .CORE_ID(1),
+              .SAVE_IF(1), .SAVE_AW(13), .SAVE_SYNC(0) )     // purple nestang logo
     sys_inst (
     .clk(clk), .hclk(hclk), .resetn(sys_resetn),
 
@@ -390,6 +402,9 @@ iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(21_492_000), .CORE_ID(1)
     .joy1(joy1_btns | joy_usb1), .joy2(joy2_btns | joy_usb2),
     .hid1(hid1), .hid2(hid2),
     .uart_tx(UART_TXD), .uart_rx(UART_RXD),
+
+    .sv_addr(sv_addr), .sv_din(sv_din), .sv_we(sv_we), .sv_q(sv_q),
+    .sv_core_we(save_written), .sv_req(sv_req), .sv_ack(sv_ack),
 
     .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid)
 );

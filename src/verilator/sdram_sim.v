@@ -45,7 +45,15 @@ module sdram_nes
     output reg [15:0] rv_dout,
     input             rv_req,
     output reg        rv_req_ack,   // ready for new requests. read data available on NEXT mclk
-    input             rv_we
+    input             rv_we,
+
+    // Save-RAM client: byte req/ack, banks 0/1 (see sdram_nes.v)
+    input      [21:0] sv_addr,
+    input       [7:0] sv_din,
+    input             sv_we,
+    input             sv_req,
+    output reg        sv_ack,
+    output reg  [7:0] sv_dout
 );
 
 assign busy = 0;
@@ -67,13 +75,14 @@ localparam PORT_NONE = 0;
 
 localparam PORT_A = 1;
 localparam PORT_B = 2;
+localparam PORT_SAVE = 3;
 
 localparam PORT_RV = 1;
 
 reg [1:0] port [2];
 reg rv_req_r;
 reg we_latch[2], oe_latch[2];
-reg [7:0] doutA_pre, doutB_pre;
+reg [7:0] doutA_pre, doutB_pre, doutS_pre;
 reg [15:0] rv_dout_pre;
 reg rv_req_new;
 
@@ -90,6 +99,7 @@ always @(posedge clk) begin
     if (~resetn) begin
         port[0] <= 0;
         port[1] <= 0;
+        sv_ack <= 0;
     end else begin
 
         // RAS
@@ -116,6 +126,13 @@ always @(posedge clk) begin
                     // $fdisplay(32'h80000002, "[%06x] <= %02x", addrA, dinA);
                 end else
                     doutA_pre <= mem_cpu[addrA];
+            end else if (sv_req ^ sv_ack) begin   // battery save-RAM (idle slot)
+                port[0] <= PORT_SAVE;
+                {we_latch[0], oe_latch[0]} <= {sv_we, ~sv_we};
+                if (sv_we)
+                    mem_cpu[sv_addr] <= sv_din;
+                else
+                    doutS_pre <= mem_cpu[sv_addr];
             end
         end
 
@@ -138,6 +155,9 @@ always @(posedge clk) begin
                 doutB <= doutB_pre; 
             end else if (port[0] == PORT_A) begin       // PPU
                 doutA <= doutA_pre;
+            end else if (port[0] == PORT_SAVE) begin    // battery save-RAM
+                sv_dout <= doutS_pre;
+                sv_ack  <= ~sv_ack;     // toggle: one ack per transaction
             end
             port[0] <= PORT_NONE;
         end
