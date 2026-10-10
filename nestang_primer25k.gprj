@@ -49,6 +49,7 @@
         <File path="src/nes2hdmi.sv" type="file.verilog" enable="1"/>
         <File path="src/scanlines.v" type="file.verilog" enable="1"/>
         <File path="src/video_fx.v" type="file.verilog" enable="1"/>
+        <File path="src/smooth.v" type="file.verilog" enable="1"/>
         <File path="src/nestang_top.sv" type="file.verilog" enable="1"/>
         <File path="src/ppu.v" type="file.verilog" enable="1"/>
         <File path="src/primer25k/config.v" type="file.verilog" enable="1"/>

@@ -11,7 +11,7 @@
 //   [14:13] mask strength: the dimmed channels lose 1/4, 3/8, 1/2, 5/8
 //   [15]    LCD grid on
 //   [17:16] grid strength: the grid pixels lose 1/8, 1/4, 3/8, 1/2
-//   [19:18] reserved (smoothing)
+//   [19:18] smoothing (smooth.v; not used here)
 //   [31:20] reserved
 // All zero = no change: the output is then bit-identical to the input, FX_LAT (11)
 // clocks later. So is any word with brightness, contrast, saturation, gamma, mask
