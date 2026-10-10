@@ -3,3 +3,6 @@ impl
 nes.gprj.user
 
 *.vcd
+
+# co-sim model build output
+sim/cosim/build/
