@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Golden model of src/video_fx.v, written from the spec (SPEC.md / the header of
-video_fx.v), not from the Verilog.
+"""Golden model of src/video_fx.v, written from the spec (the video_config table and the
+mask / grid definitions in the header of video_fx.v), not from the Verilog.
 
   model.py selfcheck      hand-computed spot values, fixed point error against real arithmetic
   model.py gen            write the test vectors (vec_*.hex) for tb_video_fx.v
