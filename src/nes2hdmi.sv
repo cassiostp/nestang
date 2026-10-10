@@ -17,6 +17,7 @@ module nes2hdmi (
     input [1:0] sl_darkness,// core_config[19:18]: 25, 50, 75, 100 % dark
     input sl_thick,         // core_config[20]: thick lines
     input sl_out,           // core_config[21]: dark output rows instead of an integer scale
+    input [31:0] video_config,  // colour controls and CRT mask, see video_fx.v (the LCD grid is unused)
 
     // overlay interface
     input overlay,
@@ -148,7 +149,8 @@ end
 localparam WIDTH=256;
 localparam HEIGHT=240;
 wire [23:0] rgb;            // actual RGB output
-reg [23:0] rgb_pre;         // before the scanline darkening
+reg [23:0] rgb_pre;         // before video_fx
+reg pic_pre;                // rgb_pre is a pixel of the picture, not the border or the overlay
 reg dark_pre;
 reg active                  /* xsynthesis syn_keep=1 */;
 reg [$clog2(WIDTH)-1:0] xx  /* xsynthesis syn_keep=1 */; // scaled-down pixel position
@@ -158,14 +160,18 @@ reg [10:0] ycnt             /* xsynthesis syn_keep=1 */;                  // fra
 reg [9:0] cy_r;
 
 // scanlines: sl_geom frames are scaled 3 rows per source line, 896x672
+// The LCD grid (video_config[15]) is not offered on the NES: 3.5 output columns per source
+// pixel is not a whole number. Bit 15 is cleared for sl_rows and video_fx, so the picture
+// geometry never depends on it and the grid flags are tied low.
 wire sl_geom, sl_show, sl_dark;
 wire [7:0] sl_yy;
 wire [1:0] sl_dk;
 sl_rows sl (
     .clk(clk_pixel), .cy(cy),
-    .cfg_on(scanlines), .cfg_dark(sl_darkness), .cfg_thick(sl_thick), .cfg_out(sl_out), .hide(overlay),
+    .cfg_on(scanlines), .cfg_dark(sl_darkness), .cfg_thick(sl_thick), .cfg_out(sl_out),
+    .cfg_grid(1'b0), .hide(overlay),
     .rows(3'd3), .dark_thin(3'd1), .dark_thick(3'd2), .lines(8'd224), .top(10'd24),
-    .geom(sl_geom), .pic_top(), .yy(sl_yy), .show(sl_show), .dark(sl_dark), .darkness(sl_dk)
+    .geom(sl_geom), .pic_top(), .yy(sl_yy), .show(sl_show), .dark(sl_dark), .last(), .darkness(sl_dk)
 );
 reg [7:0] yy_s;             // source line to show
 always @(posedge clk_pixel) yy_s <= sl_geom ? sl_yy : yy;
@@ -180,8 +186,10 @@ wire [11:0] XSTOP  = (12'd1280 + XSIZE) >> 1;
 // address calculation
 // Assume the video occupies fully on the Y direction, we are upscaling the video by `720/height`.
 // xcnt and ycnt are fractional scaling counters.
-// The scanline darkening is a register stage after rgb_pre, so active starts one clock
-// earlier than the picture it frames.
+// video_fx follows rgb_pre with FX_LAT register stages. Its first stage is the one that sl_dim
+// used to be (active started at XSTART - 2 then), so active starts FX_LAT - 1 clocks earlier
+// than that, at XSTART - 1 - FX_LAT. The xx/xcnt counters, and so the overlay lookup, run with it.
+localparam FX_LAT = 11;     // clocks from rgb_pre to rgb, see video_fx.v
 always @(posedge clk_pixel) begin
     reg active_t;
     reg [10:0] xcnt_next;
@@ -190,10 +198,10 @@ always @(posedge clk_pixel) begin
     ycnt_next = ycnt + 224;
 
     active_t = 0;
-    if ({1'b0, cx} == XSTART - 12'd2) begin
+    if ({1'b0, cx} == XSTART - 12'd1 - FX_LAT) begin
         active_t = 1;
         active <= 1;
-    end else if ({1'b0, cx} == XSTOP - 12'd2) begin
+    end else if ({1'b0, cx} == XSTOP - 12'd1 - FX_LAT) begin
         active_t = 0;
         active <= 0;
     end
@@ -237,9 +245,17 @@ always @(posedge clk_pixel) begin
             rgb_pre <= NES_PALETTE[mem_portB_rdata];
     end else
         rgb_pre <= 24'h303030;
+    pic_pre <= active & sl_show & ~overlay;
     dark_pre <= active & sl_show & ~overlay & sl_dark;
 end
-sl_dim dim (.clk(clk_pixel), .rgb_in(rgb_pre), .dark(dark_pre), .darkness(sl_dk), .rgb_out(rgb));
+
+// colour controls, the scanline darkening and the CRT mask
+video_fx fx (
+    .clk(clk_pixel), .cx(cx), .cy(cy), .video_config({video_config[31:16], 1'b0, video_config[14:0]}),
+    .rgb_in(rgb_pre), .pic_in(pic_pre), .dark_in(dark_pre), .darkness(sl_dk),
+    .col_last_in(1'b0), .row_last_in(1'b0),
+    .rgb_out(rgb)
+);
 
 // HDMI output.
 logic[2:0] tmds;

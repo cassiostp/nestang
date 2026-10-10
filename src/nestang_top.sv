@@ -121,6 +121,7 @@ wire [7:0] loader_do;
 wire loader_do_valid;
 
 wire [31:0] core_config;      // from iosys
+wire [31:0] video_config;     // from iosys
 wire pause = core_config[17]; // freeze the machine while the game menu is open
 
 // Battery saves (see iosys_bl616.v): WRAM writes seen by the CPU dirty the save.
@@ -385,6 +386,7 @@ nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y),
     .overlay_color(overlay_color),
     .scanlines(core_config[16]), .sl_darkness(core_config[19:18]), .sl_thick(core_config[20]), .sl_out(core_config[21]),
+    .video_config(video_config),
     .clk_pixel(hclk), .clk_5x_pixel(hclk5),
     .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p),
     .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
@@ -398,7 +400,7 @@ iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(21_492_000), .CORE_ID(1)
     .clk(clk), .hclk(hclk), .resetn(sys_resetn),
 
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
-    .core_config(core_config),
+    .core_config(core_config), .video_config(video_config),
     .joy1(joy1_btns | joy_usb1), .joy2(joy2_btns | joy_usb2),
     .hid1(hid1), .hid2(hid2),
     .uart_tx(UART_TXD), .uart_rx(UART_RXD),

@@ -18,29 +18,29 @@ module tb_scanlines;
             cy <= (cy == 10'd749) ? 10'd0 : cy + 10'd1;
     end
 
-    reg        cfg_on = 0, cfg_thick = 0, cfg_out = 0, hide = 0;
+    reg        cfg_on = 0, cfg_thick = 0, cfg_out = 0, cfg_grid = 0, hide = 0;
     reg  [1:0] cfg_dark = 0;
     reg  [2:0] rows = 3, dark_thin = 1, dark_thick = 2;
     reg  [7:0] lines = 224;
     reg  [9:0] top = 24;
 
-    wire       geom, show, dark;
+    wire       geom, show, dark, last;
     wire [9:0] pic_top;
     wire [7:0] yy;
     wire [1:0] darkness;
 
     sl_rows dut (
         .clk(clk), .cy(cy),
-        .cfg_on(cfg_on), .cfg_dark(cfg_dark), .cfg_thick(cfg_thick), .cfg_out(cfg_out), .hide(hide),
+        .cfg_on(cfg_on), .cfg_dark(cfg_dark), .cfg_thick(cfg_thick), .cfg_out(cfg_out), .cfg_grid(cfg_grid), .hide(hide),
         .rows(rows), .dark_thin(dark_thin), .dark_thick(dark_thick), .lines(lines), .top(top),
-        .geom(geom), .pic_top(pic_top), .yy(yy), .show(show), .dark(dark), .darkness(darkness)
+        .geom(geom), .pic_top(pic_top), .yy(yy), .show(show), .dark(dark), .last(last), .darkness(darkness)
     );
 
     integer errs = 0;
     task fail(input [8*80-1:0] what);
         begin
-            $display("FAIL: %0s (rows=%0d lines=%0d on=%b out=%b thick=%b hide=%b cy=%0d)",
-                     what, rows, lines, cfg_on, cfg_out, cfg_thick, hide, cy);
+            $display("FAIL: %0s (rows=%0d lines=%0d on=%b out=%b thick=%b grid=%b hide=%b cy=%0d)",
+                     what, rows, lines, cfg_on, cfg_out, cfg_thick, cfg_grid, hide, cy);
             $fatal(1, "tb_scanlines: FAIL");
         end
     endtask
@@ -56,20 +56,23 @@ module tb_scanlines;
 
     // expected behaviour of one output row, from the settings of the frame
     integer d, k, r_in, line_ex;
-    reg exp_show, exp_dark;
-    task check_row(input on, input out, input thick, input hid);
+    reg exp_show, exp_dark, exp_last, exp_geom;
+    task check_row(input on, input out, input thick, input hid, input grid);
         begin
             d = thick ? dark_thick : dark_thin;
-            exp_show = 1; exp_dark = 0; line_ex = -1;
-            if (on && !hid && !out) begin           // integer scale
+            exp_show = 1; exp_dark = 0; exp_last = 0; line_ex = -1;
+            exp_geom = (on && !out || grid) && !hid;            // the integer scale
+            if (exp_geom) begin
                 k = cy - top;
                 if (k < 0 || k >= rows * lines) exp_show = 0;
                 else begin
                     line_ex = k / rows;
                     r_in = k % rows;
-                    exp_dark = (r_in >= rows - d);
+                    exp_dark = on && !out && (r_in >= rows - d);    // the grid alone does not darken
+                    exp_last = (r_in == rows - 1);
                 end
-            end else if (on && !hid && out)         // output rows
+            end
+            if (on && !hid && out)                  // output rows (also with the grid's geometry)
                 exp_dark = ((cy % rows) >= rows - d);
             if (show !== exp_show) begin
                 $display("row %0d: show %b, want %b", cy, show, exp_show); fail("show");
@@ -80,23 +83,26 @@ module tb_scanlines;
             if (exp_show && line_ex >= 0 && yy !== line_ex[7:0]) begin
                 $display("row %0d: yy %0d, want %0d", cy, yy, line_ex); fail("source line");
             end
-            if (geom !== (on && !hid && !out)) fail("geom");
-            if (pic_top !== ((on && !hid && !out) ? top : 10'd0)) begin
+            if (last !== exp_last) begin
+                $display("row %0d: last %b, want %b", cy, last, exp_last); fail("last");
+            end
+            if (geom !== exp_geom) fail("geom");
+            if (pic_top !== (exp_geom ? top : 10'd0)) begin
                 $display("pic_top %0d", pic_top); fail("pic_top");
             end
         end
     endtask
 
     // run a frame at the settings, after one frame to latch them
-    task run(input on, input out, input thick, input hid);
+    task run(input on, input out, input thick, input hid, input grid);
         integer n;
         begin
-            cfg_on = on; cfg_out = out; cfg_thick = thick; hide = hid;
+            cfg_on = on; cfg_out = out; cfg_thick = thick; hide = hid; cfg_grid = grid;
             next_frame;                         // latched here
             // check rows 0..749 of the frame that started
             for (n = 0; n < 750; n = n + 1) begin
                 while (sub != 6) @(posedge clk);
-                check_row(on, out, thick, hid);
+                check_row(on, out, thick, hid, grid);
                 while (sub == 6) @(posedge clk);
             end
         end
@@ -190,28 +196,28 @@ module tb_scanlines;
         for (g = 0; g < 5; g = g + 1) begin
             rows = g_rows[g]; dark_thin = g_dthin[g]; dark_thick = g_dthick[g];
             lines = g_lines[g]; top = g_top[g];
-            for (cfg = 0; cfg < 12; cfg = cfg + 1) begin
-                // cfg: bit0 thick, bit1 out, bit3:2 = 0 off, 1 on, 2 on but hidden
-                run(cfg[3:2] == 1, cfg[1], cfg[0], cfg[3:2] == 2);
+            for (cfg = 0; cfg < 24; cfg = cfg + 1) begin
+                // cfg: bit0 thick, bit1 out, bit3:2 = 0 off, 1 on, 2 on but hidden; 12.. LCD grid on
+                run((cfg % 12) / 4 == 1, cfg[1], cfg[0], (cfg % 12) / 4 == 2, cfg >= 12);
             end
             $display("geometry %0d rows x %0d lines (top %0d): ok", rows, lines, top);
         end
 
         // the settings change in the middle of a frame: the frame under way keeps its own
         rows = 3; dark_thin = 1; dark_thick = 2; lines = 224; top = 24;
-        run(1, 0, 0, 0);
+        run(1, 0, 0, 0, 0);
         next_frame;
         while (cy != 10'd300) @(posedge clk);
-        cfg_thick = 1; cfg_out = 1;             // mid-frame
-        for (s = 0; s < 450; s = s + 1) begin   // rows 300..749: still thin, integer scale
+        cfg_thick = 1; cfg_out = 1; cfg_grid = 1;   // mid-frame
+        for (s = 0; s < 450; s = s + 1) begin   // rows 300..749: still thin, integer scale, no grid
             while (sub != 6) @(posedge clk);
-            check_row(1, 0, 0, 0);
+            check_row(1, 0, 0, 0, 0);
             while (sub == 6) @(posedge clk);
         end
         next_frame;                             // the next frame takes them
         for (s = 0; s < 750; s = s + 1) begin
             while (sub != 6) @(posedge clk);
-            check_row(1, 1, 1, 0);
+            check_row(1, 1, 1, 0, 1);
             while (sub == 6) @(posedge clk);
         end
 
