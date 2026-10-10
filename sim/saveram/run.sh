@@ -1,6 +1,6 @@
 #!/bin/sh
 # Battery-save sims (iverilog). From this directory:
-#   ./run.sh              compile and run all three testbenches
+#   ./run.sh              compile and run all four testbenches
 # Gowin tolerates the "input reg"/"inout reg" port declarations in the sources;
 # iverilog does not, so run.sh compiles sim-only copies with those softened.
 set -e
@@ -19,3 +19,12 @@ vvp tb_saveram_sdram.out
 iverilog -g2012 -DSIM -o tb_sdram_save.out \
     tb_sdram_save.v sdram_nes_sim.v
 vvp tb_sdram_save.out
+# System test: real iosys + real sdram_nes + NES-like traffic + an MCU model.
+# The sim copy shortens iosys's 20 ms joypad rate limit so pad changes are due
+# within ~0.5 ms of sim time.
+sed -e 's|localparam JOY_UPDATE_INTERVAL = 50_000_000 / 50;|localparam JOY_UPDATE_INTERVAL = 10_000;|' \
+    iosys_sim.v > iosys_sys_sim.v
+grep -q "JOY_UPDATE_INTERVAL = 10_000" iosys_sys_sim.v
+iverilog -g2012 -DSIM -o tb_system_save.out \
+    tb_system_save.v sdram_nes_sim.v iosys_sys_sim.v $RTL/iosys/uart_fixed.v
+vvp tb_system_save.out
