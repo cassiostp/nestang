@@ -110,7 +110,13 @@ sendinlp:
 	jmp  sendack
 	hiz
 
-; ---- wait 1mS
+; ---- wait 10mS: the device has 2mS to switch to the new address
+	ldi	10
+wadr:
+	wait
+	out4 0x03		; keep-alive
+	hiz
+	djnz	wadr
 	wait
 
 ; ---- send set configuration 1
@@ -173,7 +179,7 @@ connerr:
 ; ---- USB bus reset
 reset:
 	out0
-	ldi	10
+	ldi	51		; 50mS, as a root port must
 busrstlp:
 	wait
 	djnz	busrstlp
@@ -281,7 +287,7 @@ setconfig1:			; set active configuration of device 1 to 1 (default config)
 
 rcvdt:				; receive 8 bytes of data from device 
 					; and SYNC,PID at beginning, and CRC16 and ENDP at the end
-	ldi	104
+	ldi	120			; samples: 8 bytes with every bit stuffing, and the EOP
 	start
 	in
 rcvdt2:
