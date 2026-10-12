@@ -6,3 +6,6 @@ nes.gprj.user
 
 # co-sim model build output
 sim/cosim/build/
+
+# usb_hid_host microcode listing
+src/usb_hid_host_firmware/ukp.lst
