@@ -209,7 +209,7 @@ always @(posedge clk) begin
     reset_cnt <= reset_cnt == 0 ? 0 : reset_cnt - 1;
     if (reset_cnt == 0)
 //    if (reset_cnt == 0 && s1)     // for nano
-        sys_resetn <= ~(joy1_btns[5] && joy1_btns[2]);    // 8BitDo Home button = Select + Down
+        sys_resetn <= 1'b1;    // power-on only: the firmware resets games via the loading toggle
 end
 
 `ifndef VERILATOR
