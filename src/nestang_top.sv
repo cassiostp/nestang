@@ -382,7 +382,7 @@ wire [14:0] overlay_color;      // BGR5
 nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=01100_00000_01000
     .clk(clk), .resetn(sys_resetn),
     .color(color), .cycle(cycle), 
-    .scanline(scanline), .sample(pause ? 16'd0 : (sample >> 1)),  // silent while paused
+    .scanline(scanline), .sample(pause ? 16'd0 : {~sample[15], sample[14:0]}),  // offset-binary to signed; silent while paused
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y),
     .overlay_color(overlay_color),
     .scanlines(core_config[16]), .sl_darkness(core_config[19:18]), .sl_thick(core_config[20]), .sl_out(core_config[21]),

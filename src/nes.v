@@ -361,11 +361,15 @@ APU apu(
 assign sample = sample_a;
 reg [15:0] sample_a;
 
+// sample is unsigned offset-binary with silence at 16'h7FFF/8000 in every
+// path: the mapper mixers halve the inverted APU sample when mixing, so
+// the APU-only path halves it the same way. TangCore: the top level
+// converts to signed for HDMI, see sim/audio.
 always @* begin
 	case (audio_en)
 		0: sample_a = 16'd0;
 		1: sample_a = sample_ext;
-		2: sample_a = sample_inverted;
+		2: sample_a = {1'b0, sample_inverted[15:1]};
 		3: sample_a = sample_ext;
 	endcase
 end

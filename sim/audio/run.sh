@@ -1,0 +1,16 @@
+#!/bin/sh
+# NES audio sample-format sim (iverilog). From the repo root:
+#   docker run --rm --name <p>_audio --user $(id -u):$(id -g) \
+#     -v $PWD:/w -w /w/sim/audio tangcore-iv:1 sh run.sh
+# extract.pl (perl, in the image) makes iverilog copies of the real mixer
+# modules under build/; the grep gates at the end tie the bench's conversion
+# functions to the expressions actually in nes.v / nestang_top.sv.
+set -e
+cd "$(dirname "$0")"
+RTL=../../src
+perl extract.pl $RTL
+iverilog -g2012 -o tb_audio_format.out tb_audio_format.v build/audio_modules.v
+vvp tb_audio_format.out
+grep -q "{1'b0, sample_inverted\[15:1\]}" $RTL/nes.v
+grep -q "{~sample\[15\], sample\[14:0\]}" $RTL/nestang_top.sv
+echo "run.sh: conversions in nes.v and nestang_top.sv match the bench"
