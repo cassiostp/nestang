@@ -66,7 +66,7 @@ always @(posedge clk)
 		end
 	end
 
-always begin
+always @* begin
 	// mirroring mode
 	casez(mirroring[1:0])
 		2'b00   :   vram_a10 = {chr_ain[10]};    // vertical
@@ -306,7 +306,7 @@ always @(posedge clk)
 		end
 	end
 
-always begin
+always @* begin
 	// mirroring mode
 	casez(mirroring[1:0])
 		2'b00   :   vram_a10 = {chr_ain[10]};    // vertical
@@ -416,8 +416,12 @@ reg [7:0] m2;
 wire m2_n = 1;//~ce;  //m2_n not used as clk.  Invert m2 (ce).
 
 always @(posedge clk) begin
-	m2[7:1] <= m2[6:0];
-	m2[0] <= ce;
+	if (~enable) begin
+		m2 <= 8'd0;
+	end else begin
+		m2[7:1] <= m2[6:0];
+		m2[0] <= ce;
+	end
 end
 
 MAPVRC6 vrc6(m2[7], m2_n, clk, enable, prg_write, nesprg_oe, 0,
