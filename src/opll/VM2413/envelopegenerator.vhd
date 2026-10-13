@@ -183,7 +183,7 @@ begin
                         when Decay  =>
                             rm := '0'&dr;
                             egtmp := ("00"&tl&"000000") + ("00"&egphase(22-1 downto 22-7-6));
-                        when Release=>
+                        when Releas=>
                             rm := '0'&rr;
                             egtmp := ("00"&tl&"000000") + ("00"&egphase(22-1 downto 22-7-6));
                         when Finish =>
@@ -227,7 +227,7 @@ begin
                                 dphase(5 downto 0) := "110" * ('1'&rks(1 downto 0));
                                 dphase := SHL( dphase, rm(3 downto 0) );
                                 egphase := egphase - dphase(egphase'range);
-                            when Decay | Release =>
+                            when Decay | Releas =>
                                 dphase(dphase'high downto 3) := (others=>'0');
                                 dphase(2 downto 0) := '1'&rks(1 downto 0);
                                 dphase  := SHL(dphase, rm(3 downto 0) - '1');
@@ -246,9 +246,9 @@ begin
                             end if;
                         when Decay =>
                             if egphase(egphase'high downto egphase'high-4) >= '0'&sl then
-                                egstate := Release;
+                                egstate := Releas;
                             end if;
-                        when Release =>
+                        when Releas =>
                             if( egphase(egphase'high downto egphase'high-4) >= "01111" ) then
                                 egstate:= Finish;
                             end if;
@@ -261,7 +261,7 @@ begin
                         egphase(egphase'high-1 downto 0) := (others =>'1');
                         egstate:= Attack;
                     elsif lastkey(conv_integer(slot)) = '1' and key = '0' and egstate /= Finish then
-                        egstate:= Release;
+                        egstate:= Releas;
                     end if;
                     lastkey(conv_integer(slot)) := key;
 

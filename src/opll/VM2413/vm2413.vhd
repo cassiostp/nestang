@@ -117,7 +117,7 @@ package VM2413 is
 
   constant Attack  : EGSTATE_TYPE := "01";
   constant Decay   : EGSTATE_TYPE := "10";
-  constant Release : EGSTATE_TYPE := "11";
+  constant Releas : EGSTATE_TYPE := "11";
   constant Finish  : EGSTATE_TYPE := "00";
 
   -- Envelope generator phase
