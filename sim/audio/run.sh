@@ -13,4 +13,8 @@ iverilog -g2012 -o tb_audio_format.out tb_audio_format.v build/audio_modules.v
 vvp tb_audio_format.out
 grep -q "{1'b0, sample_inverted\[15:1\]}" $RTL/nes.v
 grep -q "{~sample\[15\], sample\[14:0\]}" $RTL/nestang_top.sv
+# ext_audio may list only mappers whose mixer output this bench checks
+# (19 N163, 69 SS5B): selecting a mapper with no live mixer reads the
+# undriven cart audio bus (0), which the top converts to -32768 DC.
+grep -q "assign ext_audio = (mapper_flags\[7:0\] == 19) | (mapper_flags\[7:0\] == 69);" $RTL/nestang_top.sv
 echo "run.sh: conversions in nes.v and nestang_top.sv match the bench"

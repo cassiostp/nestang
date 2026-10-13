@@ -344,7 +344,11 @@ GameLoader loader(
 );
 
 assign int_audio = 1;
-assign ext_audio = (mapper_flags[7:0] == 19) | (mapper_flags[7:0] == 24) | (mapper_flags[7:0] == 26) | (mapper_flags[7:0] == 69);
+// Only mappers whose mixer is live in cart.sv: 19 (N163) and 69 (SS5B).
+// 24/26 (VRC6) stay out while their mapper/mixer RTL is commented out
+// there: selecting them would read the undriven cart audio bus instead
+// of the APU mix. See sim/audio.
+assign ext_audio = (mapper_flags[7:0] == 19) | (mapper_flags[7:0] == 69);
 
 always @(posedge clk) begin
     clkref <= ~clkref;
