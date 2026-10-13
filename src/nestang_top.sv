@@ -344,7 +344,7 @@ GameLoader loader(
 );
 
 assign int_audio = 1;
-assign ext_audio = (mapper_flags[7:0] == 19) | (mapper_flags[7:0] == 24) | (mapper_flags[7:0] == 26);
+assign ext_audio = (mapper_flags[7:0] == 19) | (mapper_flags[7:0] == 24) | (mapper_flags[7:0] == 26) | (mapper_flags[7:0] == 69);
 
 always @(posedge clk) begin
     clkref <= ~clkref;
