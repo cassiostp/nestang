@@ -119,19 +119,20 @@ module smooth (
     //   ne is the same blend a clock earlier, combinationally (it costs timing): a pixel
     //   that blends with the next column is evaluated 6 clocks after its rd_rgb, which for
     //   a wide column is the same clock the next column's blend arrives in n, so it would
-    //   see its own column's instead.
+    //   see its own column's instead. Its rounding 128 goes into the carry as prod[7]:
+    //   (prod + 128)[15:8] is prod[15:8] with the carry out of bit 7, which is prod[7].
     reg [23:0] da = 24'd0, n = 24'd0, ne = 24'd0;
     generate for (k = 0; k < 3; k = k + 1) begin : vert
         reg signed [17:0] pv;
         wire signed [8:0] dv = $signed({1'b0, reg_b[8*k +: 8]}) - $signed({1'b0, reg_a[8*k +: 8]});
         wire signed [17:0] r8 = (pv + 18'sd128) >>> 8;
-        wire signed [17:0] re = (dv * wy_s + 18'sd128) >>> 8;
+        wire signed [17:0] prod = dv * wy_s;
         always @(posedge clk) begin
-            pv <= dv * wy_s;
+            pv <= prod;
             if (cs[2])
                 n[8*k +: 8] <= da[8*k +: 8] + r8[7:0];
             if (cs[1])
-                ne[8*k +: 8] <= reg_a[8*k +: 8] + re[7:0];
+                ne[8*k +: 8] <= reg_a[8*k +: 8] + prod[15:8] + prod[7];
         end
     end endgenerate
     always @(posedge clk)
