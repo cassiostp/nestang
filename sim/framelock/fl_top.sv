@@ -3,6 +3,7 @@
 // block in src/nes.v (gated by the DUT's frame_halt exactly as
 // src/nestang_top.sv gates the NES), synthetic picture/audio stimuli, and
 // taps for the C++ harness. No delays, no file IO: Verilator-clean.
+`timescale 1ns/1ps
 module fl_top (
     input clk,
     input clk_pixel,
