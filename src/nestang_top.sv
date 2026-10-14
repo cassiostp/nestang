@@ -123,6 +123,10 @@ wire loader_do_valid;
 wire [31:0] core_config;      // from iosys
 wire [31:0] video_config;     // from iosys
 wire pause = core_config[17]; // freeze the machine while the game menu is open
+wire frame_halt;              // from nes2hdmi: frame-lock halt, ORed with pause
+`ifdef VERILATOR
+assign frame_halt = 1'b0; // no nes2hdmi under Verilator: no frame lock
+`endif
 
 // Battery saves (see iosys_bl616.v): WRAM writes seen by the CPU dirty the save.
 wire save_written;
@@ -249,7 +253,7 @@ wire [31:0] status;
 
 // Main NES machine
 NES nes(
-    .clk(clk), .reset_nes(reset_nes), .cold_reset(1'b0), .pause(pause),
+    .clk(clk), .reset_nes(reset_nes), .cold_reset(1'b0), .pause(pause | frame_halt),
     .sys_type(system_type), .nes_div(nes_ce),
     .mapper_flags(mapper_flags),
     .sample(sample), .color(color),
@@ -397,6 +401,7 @@ nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=
     .clk(clk), .resetn(sys_resetn),
     .color(color), .cycle(cycle), 
     .scanline(scanline), .sample(pause ? 16'd0 : {~sample[15], sample[14:0]}),  // offset-binary to signed; silent while paused
+    .frame_halt(frame_halt),    // halts the NES once per frame; the pause mute above stays menu-only
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y),
     .overlay_color(overlay_color),
     .scanlines(core_config[16]), .sl_darkness(core_config[19:18]), .sl_thick(core_config[20]), .sl_out(core_config[21]),

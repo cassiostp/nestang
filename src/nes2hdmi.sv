@@ -29,6 +29,9 @@ module nes2hdmi (
 	input clk_pixel,
 	input clk_5x_pixel,
 
+    // frame lock: halt request for the NES (clk domain), see below
+    output frame_halt,
+
     // output [7:0] led,
 
 	// output signals
@@ -114,6 +117,59 @@ always @(posedge clk) begin
         mem_portA_we <= 1'b1;
     end
 end
+
+//
+// Frame lock: halt the NES once per frame so the PPU frame stays ahead of
+// the HDMI read and the single framebuffer never tears.
+//
+// The NES frame (about 60.14/60.18 Hz from the board PLLs, 262 lines of 341
+// PPU dots) is shorter than the 720p HDMI frame (60.00 Hz). Halting the whole
+// machine for the difference (about 38/49 us) once per frame locks the NES
+// to exactly the HDMI rate, 0.23-0.29 % slow, with a fixed phase.
+//
+// Phase: the NES waits at the first vblank scanline (240, all of lines 0-239
+// are written by then) and runs again when HDMI reaches RELEASE_ROW near the
+// end of its frame. The NES frame then leads the HDMI frame by about 0.9 ms:
+// the PPU finishes writing line 8 about 340 us before HDMI reads it (the
+// tightest line; reads run slower than writes after that), and the wait
+// absorbs the odd-frame short line and the de-jitter freeze. The release is
+// edge-triggered (one toggle per HDMI frame over a synchroniser) so a late
+// arrival waits for the next frame and the phase is exact every frame after
+// at most two frames, including after reset, game reload and menu pause.
+//
+localparam HALT_LINE = 240;       // NES scanline at which to wait
+localparam RELEASE_ROW = 647;     // HDMI row whose start releases the NES
+
+// HDMI side: one toggle per frame as cy passes RELEASE_ROW
+reg at_rel_q = 1'b0;
+reg rel_tgl = 1'b0;
+always @(posedge clk_pixel) begin
+    at_rel_q <= (cy == RELEASE_ROW);
+    if ((cy == RELEASE_ROW) && !at_rel_q)
+        rel_tgl <= ~rel_tgl;
+end
+
+// NES side: synchronise the toggle, then wait/release
+reg [2:0] rel_sync = 3'b0;
+reg rel_lvl_q = 1'b0;
+wire rel_pulse = rel_sync[2] ^ rel_lvl_q;   // one clk per HDMI frame
+reg halt_req = 1'b0;
+reg was_halt_line = 1'b0;
+always @(posedge clk) begin
+    rel_sync <= {rel_sync[1:0], rel_tgl};
+    rel_lvl_q <= rel_sync[2];
+    was_halt_line <= (scanline == HALT_LINE);
+    if (!resetn) begin
+        rel_sync <= 3'b0;
+        rel_lvl_q <= 1'b0;
+        halt_req <= 1'b0;
+        was_halt_line <= 1'b0;
+    end else if (rel_pulse && halt_req)
+        halt_req <= 1'b0;                       // HDMI at the release row: run
+    else if ((scanline == HALT_LINE) && !was_halt_line)
+        halt_req <= 1'b1;                       // line 239 written: wait
+end
+assign frame_halt = halt_req;
 
 // audio stuff
 //    localparam AUDIO_RATE=32000;        // weird only 32K sampling rate works
