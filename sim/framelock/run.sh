@@ -12,7 +12,8 @@
 #
 # Usage (repo root): sh sim/framelock/run.sh
 # Afterwards (host): python3 sim/framelock/check_audio.py \
-#   sim/framelock/build/audio_hdmi_138k.hex sim/framelock/build/audio_hdmi_60k.hex
+#   sim/framelock/build/audio_hdmi_138k.hex sim/framelock/build/tb_138k.log \
+#   sim/framelock/build/audio_hdmi_60k.hex sim/framelock/build/tb_60k.log
 set -e
 cd "$(dirname "$0")"
 ROOT=$(cd ../.. && pwd)

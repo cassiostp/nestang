@@ -13,7 +13,7 @@
 #include "verilated.h"
 
 static const int64_t NS = 1000;              // ps per ns
-static const int64_t STALE_NS = 20000;       // one NES frame is ~16.6 ms
+static const int64_t STALE_NS = 20000000;    // stale = previous-frame data: over a full NES frame
 static const int64_t WAIT_LO_NS = 5000;      // waits must stay in 5..500 us
 static const int64_t WAIT_HI_NS = 500000;
 static const int AUDIO_MAX_STEP = 4200;      // 440 Hz sine: ~1890/48 kHz step
@@ -43,8 +43,9 @@ int main(int argc, char **argv) {
 
     int locked = 0, forgive = 1, violations = 0;
     int halt_entered = 0, released = 0, frames_checked = 0, frame_idx = 0;
+    int last_event_frame = 0;   // power-on counts as an event (startup settle)
     int64_t t_enter = 0, last_wait = 0;
-    int64_t frame_min_age = INT64_MAX, run_min_age = INT64_MAX;
+    int64_t frame_min_age = INT64_MAX, run_min_age = INT64_MAX, frame_max_age = 0;
     int halt_q = 0, prev_reset = 1, prev_pause = 0;
     int rd_q = -1, cy_q = -1;
     int16_t prev_hw = 0;
@@ -98,7 +99,7 @@ int main(int argc, char **argv) {
             // halt monitor
             int halt = t->frame_halt;
             if (reset_model || pause_tb) locked = 0;
-            if ((prev_reset != reset_model) || (prev_pause != pause_tb)) forgive = 1;
+            if ((prev_reset != reset_model) || (prev_pause != pause_tb)) { forgive = 1; last_event_frame = frame_idx; }
             prev_reset = reset_model; prev_pause = pause_tb;
             if (halt && !halt_q) {
                 t_enter = now_ns; halt_entered++;
@@ -125,10 +126,18 @@ int main(int argc, char **argv) {
         if (rising_pix) {
             int cy = t->cy;
             if (cy == 0 && cy_q != 0 && cy_q >= 0) {
-                LOG("hdmi frame %d: min_age_ns=%lld wait_ns=%lld", frame_idx, (long long)frame_min_age, (long long)last_wait);
+                LOG("hdmi frame %d: min_age_ns=%lld max_age_ns=%lld wait_ns=%lld", frame_idx, (long long)frame_min_age, (long long)frame_max_age, (long long)last_wait);
                 if (locked) frames_checked++;
+                // steady locked frames must show fresh data everywhere: the
+                // oldest line (231) is ~2.1 ms old at its read; anything near
+                // a full frame old is a tear, even if under STALE_NS
+                if (locked && frame_idx - last_event_frame > 3 && frame_max_age > 3000000) {
+                    LOG("FAIL: max age %lld ns in frame %d", (long long)frame_max_age, frame_idx);
+                    violations++;
+                }
                 frame_idx++;
                 frame_min_age = INT64_MAX;
+                frame_max_age = 0;
             }
             cy_q = cy;
             int rd = t->memB_addr >> 8;
@@ -138,6 +147,7 @@ int main(int argc, char **argv) {
                     int64_t w = (wr_last[rd] >= 0 && wr_last[rd] < now_ns) ? wr_last[rd] : wr_prev[rd];
                     int64_t age = (w < 0) ? INT64_MAX : now_ns - w;
                     if (age < frame_min_age) frame_min_age = age;
+                    if (age > frame_max_age) frame_max_age = age;
                     if (age < run_min_age) run_min_age = age;
                     if (age > STALE_NS) { LOG("FAIL: stale read line %d age %lld ns at %lld ns (frame %d)", rd, (long long)age, (long long)now_ns, frame_idx); violations++; }
                 }

@@ -18,7 +18,7 @@
 //   docker run --rm --name nestear_lock --user $(id -u):$(id -g) -v $PWD:/w \
 //     -w /w/sim/framelock tangcore-iv:1 sh run.sh
 // run.sh runs the bench twice (console138k and console60k PLL clocks) and the
-// host then checks the audio dumps with check_audio.py.
+// host then checks the audio dumps with check_audio.py (dump+log pairs).
 `timescale 1ns/1ps
 
 module tb_frame_lock;
@@ -100,7 +100,7 @@ module tb_frame_lock;
     reg [15:0] sample_tb = 0;
     always @(posedge clk)
         if (cpu_ce) begin
-            phase_acc <= phase_acc + 16'd806;       // 440 Hz at 1.79 MHz cpu_ce
+            phase_acc <= phase_acc + 16'd16;        // 440 Hz at 1.79 MHz cpu_ce
             sample_tb <= $rtoi(32767.0 * $sin(6.2831853 * phase_acc / 65536.0));
         end
     reg [15:0] max_in_step = 0;
@@ -150,7 +150,9 @@ module tb_frame_lock;
     integer violations = 0;
     integer frames_checked = 0;
     integer frame_idx = 0;
+    integer last_event_frame = 0;   // power-on counts as an event (startup settle)
     time frame_min_age = 64'h7FFF_FFFF_FFFF_FFFF, run_min_age = 64'h7FFF_FFFF_FFFF_FFFF;
+    time frame_max_age = 0;
     reg [7:0] rd_line_q = 8'd0;
     reg [9:0] cy_q = 10'd0;
     wire [7:0] rd_line = dut.mem_portB_addr >> 8;
@@ -158,10 +160,18 @@ module tb_frame_lock;
     always @(posedge clk_pixel) begin
         cy_q <= dut.cy;
         if (dut.cy == 10'd0 && cy_q != 10'd0) begin
-            $display("hdmi frame %0d: min_age_ns=%0d wait_ns=%0d", frame_idx, frame_min_age/1000, last_wait/1000);
+            $display("hdmi frame %0d: min_age_ns=%0d max_age_ns=%0d wait_ns=%0d", frame_idx, frame_min_age/1000, frame_max_age/1000, last_wait/1000);
             if (locked) frames_checked <= frames_checked + 1;
+            // steady locked frames must show fresh data everywhere: the
+            // oldest line (231) is ~2.1 ms old at its read; anything near
+            // a full frame old is a tear, even if under the stale bound
+            if (locked && frame_idx - last_event_frame > 3 && frame_max_age > 3000000) begin
+                $display("FAIL: max age %0d ns in frame %0d", frame_max_age/1000, frame_idx);
+                violations = violations + 1;
+            end
             frame_idx <= frame_idx + 1;
             frame_min_age <= 64'h7FFF_FFFF_FFFF_FFFF;
+            frame_max_age <= 0;
         end
         if (rd_line != rd_line_q) begin
             rd_line_q <= rd_line;
@@ -175,8 +185,9 @@ module tb_frame_lock;
                 else
                     w_age = $time - w_use;
                 if (w_age < frame_min_age) frame_min_age = w_age;
+                if (w_age > frame_max_age) frame_max_age = w_age;
                 if (w_age < run_min_age) run_min_age = w_age;
-                if (w_age > 20000) begin     // one NES frame is ~16.6 ms
+                if (w_age > 20000000) begin    // stale = previous-frame data: over a full NES frame
                     $display("FAIL: stale read line %0d age %0d ns at %0d ns (frame %0d)",
                              rd_line, w_age/1000, $time/1000, frame_idx);
                     violations = violations + 1;
@@ -198,7 +209,10 @@ module tb_frame_lock;
         reset_q <= reset_model;
         pause_q <= pause_tb;
         if (reset_model || pause_tb) locked <= 0;
-        if ((reset_q != reset_model) || (pause_q != pause_tb)) forgive <= 1;
+        if ((reset_q != reset_model) || (pause_q != pause_tb)) begin
+            forgive <= 1;
+            last_event_frame <= frame_idx;
+        end
         if (frame_halt && !halt_q) begin
             t_enter = $time;
             halt_entered = halt_entered + 1;

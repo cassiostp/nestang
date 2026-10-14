@@ -80,7 +80,7 @@ module fl_top (
     reg [15:0] sample_tb = 0;
     always @(posedge clk)
         if (cpu_ce) begin
-            phase_acc <= phase_acc + 16'd806;
+            phase_acc <= phase_acc + 16'd16;        // 440 Hz at 1.79 MHz cpu_ce
             sample_tb <= $rtoi(32767.0 * $sin(6.2831853 * phase_acc / 65536.0));
         end
 
