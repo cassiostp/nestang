@@ -29,7 +29,7 @@
 // What the scaler provides (all in the pixel clock domain). It addresses its frame or
 // line buffer as before, but twice per source column: rd_b says, every clock, whether
 // this clock's read is of the line `a` (0) or of the neighbour line `b` (1). The column
-// is held for at least 3 clocks (the scale is at least 3x), so one read port is enough.
+// is held for at least 2 clocks (the scale is at least 2x), so one read port is enough.
 //   rd_rgb    the pixel read two clocks earlier, after the palette (what rgb_pre was)
 //   col_new   aligned with rd_rgb: the read is the first of a new source column
 //             (the column address changed on this clock's address cycle)
@@ -44,7 +44,7 @@
 // blended (wy = 0).
 //
 // Timing. For the output pixel whose address cycle is clock t, rd_rgb is at t + 2 and
-// rgb_out at t + 2 + LAT (LAT = 9). Without smoothing the scaler's pixel was ready at
+// rgb_out at t + 2 + LAT (LAT = 8). Without smoothing the scaler's pixel was ready at
 // t + 2, so the scaler starts its counters, and so its `active` window, LAT clocks earlier
 // than it did (one more if it registers rgb_out, as nes2hdmi does), and delays what goes
 // with the pixel (the overlay lookup address, the flags) by the same number of clocks:
@@ -66,7 +66,7 @@ module smooth (
     output reg [23:0] rgb_out           // LAT clocks after rd_rgb
 );
 
-    localparam LAT = 9;
+    localparam LAT = 8;
 
     // the mode: synchronised to the pixel clock, latched at the start of every frame
     reg [1:0] cfg_a, cfg_b;
@@ -102,11 +102,11 @@ module smooth (
     end
 
     // The weights of a pixel travel along to the stage that uses them.
-    reg  [62:0] sd = 63'd0;
+    reg  [53:0] sd = 54'd0;
     always @(posedge clk)
-        sd <= {sd[53:0], hnext, on ? wx : 8'd0};
-    wire [7:0] wx_d = sd[61:54];
-    wire       hn_d = sd[62];
+        sd <= {sd[44:0], hnext, on ? wx : 8'd0};
+    wire [7:0] wx_d = sd[52:45];
+    wire       hn_d = sd[53];
 
     wire [7:0] wy_g = on ? wy : 8'd0;
     wire signed [8:0] wy_s = {1'b0, wy_g};
@@ -131,12 +131,13 @@ module smooth (
         da <= reg_a;
 
     // The columns, as the pixels see them: c = the pixel's column, p = the one before it,
-    // n = the one after it (as soon as it has arrived: the next column starts at most 3
-    // clocks after a pixel that blends with it). c and p move on with the column, 6
-    // clocks after col_new, so that the pixel evaluated 7 clocks after its rd_rgb sees them.
+    // n = the one after it (as soon as it has arrived: the next column starts 1 clock after a
+    // pixel that blends with it, and the one after that no sooner than 2 clocks later). c and
+    // p move on with the column, 5 clocks after col_new, so that the pixel evaluated 6 clocks
+    // after its rd_rgb sees them.
     reg [23:0] c = 24'd0, p = 24'd0;
     always @(posedge clk)
-        if (cs[5]) begin
+        if (cs[4]) begin
             c <= n;
             p <= c;
         end
