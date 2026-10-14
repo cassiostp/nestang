@@ -115,16 +115,23 @@ module smooth (
     genvar k;
 
     // vertical blend of the pair (reg_a, reg_b), registered when it is a new column's.
-    //   V1: difference times weight   V2 (on col_new): the blend, held in n
-    reg [23:0] da = 24'd0, n = 24'd0;
+    //   V1: difference times weight   V2 (on col_new): the blend, held in n for c and p.
+    //   ne is the same blend a clock earlier, combinationally (it costs timing): a pixel
+    //   that blends with the next column is evaluated 6 clocks after its rd_rgb, which for
+    //   a wide column is the same clock the next column's blend arrives in n, so it would
+    //   see its own column's instead.
+    reg [23:0] da = 24'd0, n = 24'd0, ne = 24'd0;
     generate for (k = 0; k < 3; k = k + 1) begin : vert
         reg signed [17:0] pv;
         wire signed [8:0] dv = $signed({1'b0, reg_b[8*k +: 8]}) - $signed({1'b0, reg_a[8*k +: 8]});
         wire signed [17:0] r8 = (pv + 18'sd128) >>> 8;
+        wire signed [17:0] re = (dv * wy_s + 18'sd128) >>> 8;
         always @(posedge clk) begin
             pv <= dv * wy_s;
             if (cs[2])
                 n[8*k +: 8] <= da[8*k +: 8] + r8[7:0];
+            if (cs[1])
+                ne[8*k +: 8] <= reg_a[8*k +: 8] + re[7:0];
         end
     end endgenerate
     always @(posedge clk)
@@ -134,7 +141,9 @@ module smooth (
     // n = the one after it (as soon as it has arrived: the next column starts 1 clock after a
     // pixel that blends with it, and the one after that no sooner than 2 clocks later). c and
     // p move on with the column, 5 clocks after col_new, so that the pixel evaluated 6 clocks
-    // after its rd_rgb sees them.
+    // after its rd_rgb sees them. The blend with the next column uses ne, except on the last
+    // read of a column (cs[4] set: col_new on the next clock), where n has caught up and ne
+    // already holds the column after that.
     reg [23:0] c = 24'd0, p = 24'd0;
     always @(posedge clk)
         if (cs[4]) begin
@@ -146,7 +155,7 @@ module smooth (
     reg [23:0] cd = 24'd0;
     generate for (k = 0; k < 3; k = k + 1) begin : horz
         reg signed [17:0] ph1;
-        wire [7:0] o = hn_d ? n[8*k +: 8] : p[8*k +: 8];
+        wire [7:0] o = hn_d ? (cs[4] ? n[8*k +: 8] : ne[8*k +: 8]) : p[8*k +: 8];
         wire signed [8:0] dh = $signed({1'b0, o}) - $signed({1'b0, c[8*k +: 8]});
         wire signed [17:0] h8 = (ph1 + 18'sd128) >>> 8;
         always @(posedge clk) begin
