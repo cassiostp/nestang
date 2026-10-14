@@ -1,5 +1,0 @@
-../../src/nes2hdmi.sv:408: warning: Port 5 (reset) of hdmi expects 1 bits, got 32.
-../../src/nes2hdmi.sv:408:        : Pruning (signed) 31 high bits of the expression.
-iverilog elaboration: ok
-run.sh: both clock configs PASS
-RUNSH_EXIT=0

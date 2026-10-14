@@ -12,3 +12,8 @@ sim/framelock/build/
 
 # usb_hid_host microcode listing
 src/usb_hid_host_firmware/ukp.lst
+
+# framelock host-side artefacts
+sim/framelock/__pycache__/
+sim/framelock/run_full.log
+sim/*/run_bg.log
