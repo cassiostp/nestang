@@ -124,6 +124,7 @@ wire [31:0] core_config;      // from iosys
 wire [31:0] video_config;     // from iosys
 wire pause = core_config[17]; // freeze the machine while the game menu is open
 wire frame_halt;              // from nes2hdmi: frame-lock halt, ORed with pause
+wire video_std_timing = 1'b0; // 0: native NES-rate HDMI (1647-pixel lines); 1: standard 60 Hz, for displays that refuse it
 `ifdef VERILATOR
 assign frame_halt = 1'b0; // no nes2hdmi under Verilator: no frame lock
 `endif
@@ -406,6 +407,7 @@ nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=
     .overlay_color(overlay_color),
     .scanlines(core_config[16]), .sl_darkness(core_config[19:18]), .sl_thick(core_config[20]), .sl_out(core_config[21]),
     .video_config(video_config),
+    .std_timing(video_std_timing),
     .clk_pixel(hclk), .clk_5x_pixel(hclk5),
     .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p),
     .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)

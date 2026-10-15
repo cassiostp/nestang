@@ -29,6 +29,9 @@ module nes2hdmi (
 	input clk_pixel,
 	input clk_5x_pixel,
 
+    // 1: standard 60.00 Hz 720p; 0: native NES rate (1647-pixel lines)
+    input std_timing,
+
     // frame lock: halt request for the NES (clk domain), see below
     output frame_halt,
 
@@ -50,7 +53,10 @@ localparam TOTALWIDTH = 1650;
 localparam TOTALHEIGHT = 750;
 localparam SCALE = 5;
 localparam VIDEOID = 4;
-localparam VIDEO_REFRESH = 60.0;
+localparam VIDEO_REFRESH = 60.0;    // the audio clock regeneration only: the line is NATIVE below
+// 74.25 MHz / (1647x750) = 60.1093 Hz: the largest whole-pixel line at or
+// above the NES 60.0988 Hz (21.477272 MHz / 4 / 89341.5 dots)
+localparam NATIVE_LINE = 1647;
 
 // localparam IDIV_SEL_X5 = 3;
 // localparam FBDIV_SEL_X5 = 54;
@@ -122,10 +128,12 @@ end
 // Frame lock: halt the NES once per frame so the PPU frame stays ahead of
 // the HDMI read and the single framebuffer never tears.
 //
-// The NES frame (about 60.14/60.18 Hz from the board PLLs, 262 lines of 341
-// PPU dots) is shorter than the 720p HDMI frame (60.00 Hz). Halting the whole
-// machine for the difference (about 38/49 us) once per frame locks the NES
-// to exactly the HDMI rate, 0.23-0.29 % slow, with a fixed phase.
+// The NES frame (60.1775 Hz on console138k, 60.1379 Hz on console60k from the
+// board PLLs, 262 lines of 341 PPU dots) is shorter than the native-rate
+// 720p HDMI frame (60.1093 Hz at 1647 pixels per line, the largest line at
+// or above the NES 60.0988 Hz). Halting the whole machine for the
+// difference (about 8/19 us) once per frame locks the NES to exactly the
+// HDMI rate, 0.017 % fast, with a fixed phase.
 //
 // Phase: the NES waits at the first vblank scanline (240, all of lines 0-239
 // are written by then) and runs again when HDMI reaches RELEASE_ROW near the
@@ -403,13 +411,15 @@ hdmi #( .VIDEO_ID_CODE(VIDEOID),
         .AUDIO_RATE(AUDIO_RATE), 
         .AUDIO_BIT_WIDTH(AUDIO_BIT_WIDTH),
         .START_X(0),
-        .START_Y(0) )
+        .START_Y(0),
+        .NATIVE_FRAME_WIDTH(NATIVE_LINE) )
 
 hdmi( .clk_pixel_x5(clk_5x_pixel), 
         .clk_pixel(clk_pixel), 
         .clk_audio(clk_audio),
         .rgb(rgb), 
         .reset( 0 ),
+        .std_timing(std_timing),
         .audio_sample_word(audio_sample_word),
         .tmds(tmds), 
         .tmds_clock(tmdsClk), 

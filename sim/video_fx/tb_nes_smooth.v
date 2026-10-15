@@ -37,6 +37,7 @@ module tb_nes_smooth;
         .color(6'd0), .cycle(9'd0), .scanline(9'd0), .sample(16'd0), .aspect_8x7(1'b0),
         .scanlines(sl_on), .sl_darkness(sl_dark), .sl_thick(sl_thick), .sl_out(sl_out),
         .video_config(vcfg),
+        .std_timing(1'b0),      // native NES rate, as in hardware
         .overlay(ov), .overlay_x(ovx), .overlay_y(ovy), .overlay_color(ovc),
         .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
         .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p), .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)

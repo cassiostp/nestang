@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Host-side check of the frame-lock HDMI audio dumps (see run.sh): the 49 us
+# Host-side check of the frame-lock HDMI audio dumps (see run.sh): the 8/19 us
 # hold must not click and must not shift DC. Windows where the stream
 # legitimately freezes (menu pauses, pre-lock startup, resets and pause-offs
 # up to re-lock) are masked out using the scenario/halt lines in the tb log:
@@ -11,8 +11,8 @@
 import math, sys
 
 FS = 48028.0  # DUT audio tick: 2x773 pixel clocks (AUDIO_CLK_DELAY in nes2hdmi.sv)
-OK_WAIT_LO = 30000     # steady waits: 38 us (60K) .. 49 us (138K), both boards
-OK_WAIT_HI = 60000
+OK_WAIT_LO = 5000      # steady waits: 8 us (60K) .. 19 us (138K), both boards
+OK_WAIT_HI = 30000
 
 def windows(logpath):
     # Mask every window where the stream legitimately freezes: the menu

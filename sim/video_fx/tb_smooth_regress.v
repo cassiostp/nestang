@@ -38,6 +38,7 @@ module tb_smooth_regress;
         .color(6'd0), .cycle(9'd0), .scanline(9'd0), .sample(16'd0), .aspect_8x7(1'b0),
         .scanlines(sl_on), .sl_darkness(sl_dark), .sl_thick(sl_thick), .sl_out(sl_out),
         .video_config(vcfg),
+        .std_timing(1'b0),      // native NES rate, as in hardware
         .overlay(ov), .overlay_x(ovx_n), .overlay_y(ovy_n), .overlay_color(ovc_n),
         .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
         .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p), .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
@@ -100,7 +101,7 @@ module tb_smooth_regress;
                          on, out, thick, dk, over, cfg, bad, cmp);
                 $fatal(1, "tb_smooth_regress: FAIL");
             end
-            if (cmp < 2 * 720 * 1650 - 10 || (!over && picture < 2 * 500 * 800)) begin
+            if (cmp < 2 * 720 * 1647 - 10 || (!over && picture < 2 * 500 * 800)) begin
                 $display("FAIL: only %0d pixels compared, %0d of them picture", cmp, picture);
                 $fatal(1, "tb_smooth_regress: FAIL");
             end
