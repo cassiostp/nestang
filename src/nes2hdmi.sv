@@ -138,7 +138,7 @@ end
 // Phase: the NES waits at the first vblank scanline (240, all of lines 0-239
 // are written by then) and runs again when HDMI reaches RELEASE_ROW near the
 // end of its frame. The NES frame then leads the HDMI frame by about 0.9 ms:
-// the PPU finishes writing line 8 about 340 us before HDMI reads it (the
+// the PPU finishes writing line 8 about 271 us before HDMI reads it (the
 // tightest line; reads run slower than writes after that), and the wait
 // absorbs the odd-frame short line and the de-jitter freeze. The release is
 // edge-triggered (one toggle per HDMI frame over a synchroniser) so a late
