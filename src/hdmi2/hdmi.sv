@@ -64,10 +64,10 @@ module hdmi
 
     // Native console frame rate: when std_timing is 1 the 720p mode (VIC 4)
     // uses the standard 1650 x 750 timing; when 0 it uses
-    // NATIVE_FRAME_WIDTH x 750, a slightly shorter line that runs the HDMI
-    // output at the console's own refresh rate. Only the line length
-    // changes; the sync pulse start/size and polarity stay the 720p values.
-    // All other VIC modes are untouched.
+    // NATIVE_FRAME_WIDTH x 750, a line a few pixels longer or shorter that
+    // runs the HDMI output at the console's own refresh rate. Only the line
+    // length changes; the sync pulse start/size and polarity stay the 720p
+    // values. All other VIC modes are untouched.
     parameter int NATIVE_FRAME_WIDTH = 1650
 )
 (
