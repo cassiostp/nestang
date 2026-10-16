@@ -192,6 +192,7 @@ set_option -use_i2c_as_gpio 1
 set_option -use_cpu_as_gpio 1
 set_option -use_sspi_as_gpio 1
 set_option -multi_boot 1
-set_option -place_option 2
+set_option -place_option 3
+set_option -route_option 2
 
 run all
