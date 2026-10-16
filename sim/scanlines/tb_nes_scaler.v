@@ -1,5 +1,5 @@
-// nes2hdmi with scanlines, whole frames: the HDMI part is a stub that counts
-// cx/cy like the real one (hdmi_stub.v), the picture is the scaler's rgb output.
+// nes2hdmi with scanlines, whole frames, at 480p120: the HDMI part is a stub
+// that counts cx/cy like the real one (hdmi_stub.v), the picture is the scaler's rgb output.
 // Checks, for each setting, every output row of the frame against the model of
 // src/scanlines.v: which source line it shows, border rows, dark rows and the
 // darkened colour; and the horizontal extent of the picture.
@@ -9,7 +9,7 @@
 module tb_nes_scaler;
 
     reg clk_pixel = 0, clk = 0;
-    always #6.734 clk_pixel = ~clk_pixel;       // 74.25 MHz
+    always #9.259 clk_pixel = ~clk_pixel;       // 54 MHz
     always #23.28 clk = ~clk;                   // 21.477 MHz
 
     reg        sl_on = 0, sl_thick = 0, sl_out = 0, ov = 0;
@@ -31,10 +31,10 @@ module tb_nes_scaler;
     );
 
     // what the HDMI sink would show: rgb while cx = x + 1
-    reg [23:0] img [0:1280*720-1];
+    reg [23:0] img [0:720*480-1];
     always @(posedge clk_pixel)
-        if (dut.cy < 10'd720 && dut.cx >= 11'd1 && dut.cx <= 11'd1280)
-            img[dut.cy * 1280 + dut.cx - 1] = dut.rgb;
+        if (dut.cy < 10'd480 && dut.cx >= 11'd1 && dut.cx <= 11'd720)
+            img[dut.cy * 720 + dut.cx - 1] = dut.rgb;
 
     localparam BORDER = 24'h303030;
 
@@ -71,12 +71,12 @@ module tb_nes_scaler;
     endfunction
 
     // wait for two frame ends after a settings change: the second frame is drawn with
-    // the new settings, and img holds it when this returns (in the blanking at row 726)
+    // the new settings, and img holds it when this returns (in the blanking at row 521)
     task settle;
         begin
             repeat (2) begin
-                while (dut.cy != 10'd725) @(posedge clk_pixel);
-                while (dut.cy == 10'd725) @(posedge clk_pixel);
+                while (dut.cy != 10'd521) @(posedge clk_pixel);
+                while (dut.cy == 10'd521) @(posedge clk_pixel);
             end
         end
     endtask
@@ -90,7 +90,7 @@ module tb_nes_scaler;
     endtask
 
     // the model
-    localparam R = 3, LINES = 224, TOP = 24, GEOM_W = 896, FULL_W = 960;
+    localparam R = 2, LINES = 224, TOP = 16, GEOM_W = 640, FULL_W = 640;
     integer row, line, rr, nd, XP, x, first, last, runs, runlen, minrun, maxrun, w;
     reg [23:0] want, got, prev;
     reg is_geom;
@@ -98,10 +98,10 @@ module tb_nes_scaler;
     task check_rows(input on, input out, input thick, input [1:0] dk, input over);
         begin
             is_geom = on & ~out & ~over;
-            nd = thick ? 2 : 1;
-            XP = 640;
-            for (row = 0; row < 720; row = row + 1) begin
-                got = img[row * 1280 + XP];
+            nd = 1;     // at 2 rows per line thin and thick darken 1 row alike
+            XP = 360;
+            for (row = 0; row < 480; row = row + 1) begin
+                got = img[row * 720 + XP];
                 if (over)
                     want = overlay_rgb(overlay_color);
                 else if (is_geom) begin
@@ -114,14 +114,14 @@ module tb_nes_scaler;
                         if (rr >= R - nd) want = darken(want, dk);
                     end
                 end else begin
-                    line = row * LINES / 720;       // the fractional scaler
+                    line = row * LINES / 480;       // the fractional scaler
                     want = dut.NES_PALETTE[pal_idx(line + 8)];
                     if (on & out & ((row % R) >= R - nd)) want = darken(want, dk);
                 end
                 if (got !== want) fail("picture", row, got, want);
                 // the left border is never touched
-                if (img[row * 1280 + 100] !== BORDER) fail("left border", row, img[row * 1280 + 100], BORDER);
-                if (img[row * 1280 + 1200] !== BORDER) fail("right border", row, img[row * 1280 + 1200], BORDER);
+                if (img[row * 720 + 20] !== BORDER) fail("left border", row, img[row * 720 + 20], BORDER);
+                if (img[row * 720 + 700] !== BORDER) fail("right border", row, img[row * 720 + 700], BORDER);
             end
         end
     endtask
@@ -129,10 +129,10 @@ module tb_nes_scaler;
     // horizontal extent and pixel widths on a row through the middle of the picture
     task check_columns(input geom);
         begin
-            row = 360;
+            row = 240;
             first = -1; last = -1; runs = 0; minrun = 99; maxrun = 0; runlen = 0; prev = BORDER;
-            for (x = 0; x < 1280; x = x + 1) begin
-                got = img[row * 1280 + x];
+            for (x = 0; x < 720; x = x + 1) begin
+                got = img[row * 720 + x];
                 if (got !== BORDER) begin
                     if (first < 0) first = x;
                     last = x;
@@ -149,21 +149,21 @@ module tb_nes_scaler;
             end
             w = last - first + 1;
             if (geom) begin
-                if (first !== (1280 - GEOM_W) / 2 || w !== GEOM_W) begin
-                    $display("FAIL: integer scale picture spans x=%0d..%0d (width %0d), want %0d..%0d", first, last, w, (1280 - GEOM_W) / 2, (1280 + GEOM_W) / 2 - 1);
+                if (first !== (720 - GEOM_W) / 2 || w !== GEOM_W) begin
+                    $display("FAIL: integer scale picture spans x=%0d..%0d (width %0d), want %0d..%0d", first, last, w, (720 - GEOM_W) / 2, (720 + GEOM_W) / 2 - 1);
                     $fatal(1, "tb_nes_scaler: FAIL");
                 end
-                if (minrun < 3 || maxrun > 4) begin
-                    $display("FAIL: pixel widths %0d..%0d, want 3..4", minrun, maxrun);
+                if (minrun < 2 || maxrun > 3) begin
+                    $display("FAIL: pixel widths %0d..%0d, want 2..3", minrun, maxrun);
                     $fatal(1, "tb_nes_scaler: FAIL");
                 end
             end else begin
-                if (first !== (1280 - FULL_W) / 2 || w !== FULL_W) begin
-                    $display("FAIL: normal picture spans x=%0d..%0d (width %0d), want %0d..%0d", first, last, w, (1280 - FULL_W) / 2, (1280 + FULL_W) / 2 - 1);
+                if (first !== (720 - FULL_W) / 2 || w !== FULL_W) begin
+                    $display("FAIL: normal picture spans x=%0d..%0d (width %0d), want %0d..%0d", first, last, w, (720 - FULL_W) / 2, (720 + FULL_W) / 2 - 1);
                     $fatal(1, "tb_nes_scaler: FAIL");
                 end
-                if (minrun < 3 || maxrun > 4) begin
-                    $display("FAIL: pixel widths %0d..%0d, want 3..4", minrun, maxrun);
+                if (minrun < 2 || maxrun > 3) begin
+                    $display("FAIL: pixel widths %0d..%0d, want 2..3", minrun, maxrun);
                     $fatal(1, "tb_nes_scaler: FAIL");
                 end
             end

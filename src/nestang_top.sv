@@ -124,8 +124,8 @@ wire [31:0] core_config;      // from iosys
 wire [31:0] video_config;     // from iosys
 wire pause = core_config[17]; // freeze the machine while the game menu is open
 wire frame_halt;              // from nes2hdmi: frame-lock halt, ORed with pause
-wire video_std_timing = 1'b0; // 0: native NES-rate HDMI (1647-pixel lines); 1: standard rate, for displays that refuse it
-wire [1:0] bfi_mode = 2'd1;   // BFI test build: black inserted frame (720p120 out); 0 would show both frames lit
+wire video_std_timing = 1'b0; // 0: native NES-rate x2 HDMI (855-pixel lines); 1: standard 120 Hz, for displays that refuse it
+wire [1:0] bfi_mode = 2'd1;   // BFI test build: black inserted frame (480p120 out); 0 would show both frames lit
 `ifdef VERILATOR
 assign frame_halt = 1'b0; // no nes2hdmi under Verilator: no frame lock
 `endif
@@ -204,8 +204,8 @@ wire ext_audio;
 
 wire clk;       // 21.477Mhz main clock
 wire fclk;      // 3x clk SDRAM clock
-wire hclk;      // 720p120 pixel clock: 148.5 Mhz (BFI test build)
-wire hclk5;     // 5x pixel clock: 742.5 Mhz
+wire hclk;      // 480p120 pixel clock: 54 Mhz (BFI test build)
+wire hclk5;     // 5x pixel clock: 270 Mhz
 wire clk27;     // 27Mhz to generate hclk/hclk5
 wire clk_usb;   // 12Mhz USB clock
 
@@ -399,7 +399,7 @@ wire [7:0]  overlay_y;
 wire [14:0] overlay_color;      // BGR5
 
 // HDMI output
-nes2hdmi #(.SMOOTH_EN(1'b0)) u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=01100_00000_01000
+nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=01100_00000_01000
     .clk(clk), .resetn(sys_resetn),
     .color(color), .cycle(cycle), 
     .scanline(scanline), .sample(pause ? 16'd0 : {~sample[15], sample[14:0]}),  // offset-binary to signed; silent while paused

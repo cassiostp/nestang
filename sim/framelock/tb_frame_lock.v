@@ -30,7 +30,7 @@ module tb_frame_lock;
     localparam real CLK_MHZ = 21.505376;    // 50*40/93, src/pll/gowin_pll_nes.v
 `endif
     localparam real CLK_HALF_NS = 500.0 / CLK_MHZ;
-    localparam real PIX_HALF_NS = 500.0 / 148.5;    // hclk5/5, both boards (BFI 720p120)
+    localparam real PIX_HALF_NS = 500.0 / 54.0;    // hclk5/5, 138K only (BFI 480p120)
 
     reg clk = 0, clk_pixel = 0;
     always #(CLK_HALF_NS) clk = ~clk;
