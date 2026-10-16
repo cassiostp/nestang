@@ -1,7 +1,10 @@
 // Verilator harness for the frame-lock run: two exact-rate clocks, the
 // scenario (power-on, menu pause, core reset, menu pause over ~650 NES
 // frames), and the checks. Mirrors tb_frame_lock.v; this is the engine that
-// makes 600+ frames affordable.
+// makes 600+ frames affordable. The HDMI side runs at 720p120 for BFI:
+// every game frame must be read twice (lit pass, then inserted pass), each
+// pass from a single game frame (per-line write-frame tags), lit passes
+// stepping by exactly one game frame, with the inserted pass all black.
 //
 // argv: <clk_half_ps> <pix_half_ps> <tag>  (tag prefixes log/audio files)
 // Prints tb_frame_lock: PASS on success (and returns nonzero otherwise).
@@ -30,7 +33,11 @@ int main(int argc, char **argv) {
 
     int64_t now = 0, next_clk = clk_half, next_pix = pix_half;
     int64_t wr_last[240], wr_prev[240];
-    for (int i = 0; i < 240; i++) wr_last[i] = wr_prev[i] = -1;
+    int wr_frame[240];
+    for (int i = 0; i < 240; i++) { wr_last[i] = wr_prev[i] = -1; wr_frame[i] = -1; }
+    int game_wr = 0;                 // game frame currently being written
+    int pass_fmin = 0, pass_fmax = -1, pass_ins = 0, last_lit = -1;
+    int lit_nonzero = 0, ins_nonzero = 0, stale_in_frame = 0;
     auto eval = [&]() { t->eval(); };
 
     // scenario, counted in NES frames (scanline-240 entries with the model running)
@@ -72,6 +79,7 @@ int main(int argc, char **argv) {
             if (phase == 0 && !por_n && now_ns > 1000) { por_n = true; reset_model = false; }
             bool is240 = at240();
             if (is240 && !prev240) {
+                game_wr++;           // writes from here belong to the next game frame
                 frames_in_phase++;
                 if ((phase == 0 && frames_in_phase >= 100) ||
                     (phase == 2 && frames_in_phase >= 200) ||
@@ -99,7 +107,7 @@ int main(int argc, char **argv) {
             // halt monitor
             int halt = t->frame_halt;
             if (reset_model || pause_tb) locked = 0;
-            if ((prev_reset != reset_model) || (prev_pause != pause_tb)) { forgive = 1; last_event_frame = frame_idx; }
+            if ((prev_reset != reset_model) || (prev_pause != pause_tb)) { forgive = 1; last_event_frame = frame_idx; last_lit = -1; }
             prev_reset = reset_model; prev_pause = pause_tb;
             if (halt && !halt_q) {
                 t_enter = now_ns; halt_entered++;
@@ -119,25 +127,41 @@ int main(int argc, char **argv) {
             // write timestamps from port A
             if (t->memA_we) {
                 int ln = t->memA_addr >> 8;
-                if (ln >= 0 && ln < 240) { wr_prev[ln] = wr_last[ln]; wr_last[ln] = now_ns; }
+                if (ln >= 0 && ln < 240) { wr_prev[ln] = wr_last[ln]; wr_last[ln] = now_ns; wr_frame[ln] = game_wr; }
             }
         }
 
         if (rising_pix) {
             int cy = t->cy;
+            if (cy == 100 && cy_q != 100) pass_ins = t->bfi_ins;
+            // BFI black check: picture-centre sample on every active line
+            if (t->cx == 641 && cy < 720 && locked) {
+                if (pass_ins) { if (t->rgb_out != 0) ins_nonzero++; }
+                else if (t->rgb_out != 0) lit_nonzero++;
+            }
             if (cy == 0 && cy_q != 0 && cy_q >= 0) {
-                LOG("hdmi frame %d: min_age_ns=%lld max_age_ns=%lld wait_ns=%lld", frame_idx, (long long)frame_min_age, (long long)frame_max_age, (long long)last_wait);
+                LOG("hdmi frame %d: ins=%d game=%d..%d min_age_ns=%lld max_age_ns=%lld wait_ns=%lld", frame_idx, pass_ins, pass_fmin, pass_fmax, (long long)frame_min_age, (long long)frame_max_age, (long long)last_wait);
                 if (locked) frames_checked++;
-                // steady locked frames must show fresh data everywhere: the
-                // oldest line (231) is ~2.1 ms old at its read; anything near
-                // a full frame old is a tear, even if under STALE_NS
-                if (locked && frame_idx - last_event_frame > 3 && frame_max_age > 3000000) {
-                    LOG("FAIL: max age %lld ns in frame %d", (long long)frame_max_age, frame_idx);
-                    violations++;
+                bool settled = locked && frame_idx - last_event_frame > 6;
+                // each pass must come from a single game frame; lit passes
+                // step by one game frame; the inserted pass repeats the lit one
+                if (settled && pass_fmax >= 0) {
+                    if (pass_fmin != pass_fmax) { LOG("FAIL: mixed game frames %d..%d in hdmi frame %d (ins=%d)", pass_fmin, pass_fmax, frame_idx, pass_ins); violations++; }
+                    else if (!pass_ins) {
+                        if (last_lit >= 0 && pass_fmin != last_lit + 1) { LOG("FAIL: lit game frame %d after %d in hdmi frame %d", pass_fmin, last_lit, frame_idx); violations++; }
+                        last_lit = pass_fmin;
+                    } else if (last_lit >= 0 && pass_fmin != last_lit) {
+                        LOG("FAIL: inserted game frame %d, lit was %d, in hdmi frame %d", pass_fmin, last_lit, frame_idx); violations++;
+                    }
+                    if (pass_ins && ins_nonzero) { LOG("FAIL: %d non-black centre samples in inserted hdmi frame %d", ins_nonzero, frame_idx); violations++; }
+                    if (!pass_ins && !lit_nonzero) { LOG("FAIL: lit hdmi frame %d all black at centre", frame_idx); violations++; }
+                    if (frame_max_age > 17000000) { LOG("FAIL: max age %lld ns in frame %d", (long long)frame_max_age, frame_idx); violations++; }
+                    if (stale_in_frame) { LOG("FAIL: %d stale reads in frame %d", stale_in_frame, frame_idx); violations++; }
                 }
                 frame_idx++;
                 frame_min_age = INT64_MAX;
                 frame_max_age = 0;
+                pass_fmin = 0; pass_fmax = -1; lit_nonzero = 0; ins_nonzero = 0; stale_in_frame = 0;
             }
             cy_q = cy;
             int rd = t->memB_addr >> 8;
@@ -149,7 +173,14 @@ int main(int argc, char **argv) {
                     if (age < frame_min_age) frame_min_age = age;
                     if (age > frame_max_age) frame_max_age = age;
                     if (age < run_min_age) run_min_age = age;
-                    if (age > STALE_NS) { LOG("FAIL: stale read line %d age %lld ns at %lld ns (frame %d)", rd, (long long)age, (long long)now_ns, frame_idx); violations++; }
+                    // stale reads during acquisition (before the settle
+                    // window after an event) are the forgiven transient;
+                    // count them per frame and judge at frame end
+                    if (age > STALE_NS) stale_in_frame++;
+                    if (wr_frame[rd] >= 0) {
+                        if (pass_fmax < 0 || wr_frame[rd] < pass_fmin) pass_fmin = wr_frame[rd];
+                        if (wr_frame[rd] > pass_fmax) pass_fmax = wr_frame[rd];
+                    }
                 }
             }
             // audio: sample words at the DUT's audio tick

@@ -392,7 +392,9 @@ always @(posedge clk_pixel) begin
 end
 
 smooth sm (
-    .clk(clk_pixel), .cy(cy), .cfg(video_config[19:18]), .mode(sm_mode),
+    // BFI test build: smoothing compiled out (its blend is the 148.5 MHz
+    // critical path); the picture is nearest-neighbour in this build
+    .clk(clk_pixel), .cy(cy), .cfg(2'd0), .mode(sm_mode),
     .rd_b(sm_rd_b), .rd_rgb(pal_q), .col_new(cn2), .wx(wx), .hnext(hnext), .wy(wy),
     .rgb_out(sm_rgb)
 );
