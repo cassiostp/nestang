@@ -64,17 +64,18 @@ module sdram_nes #(
     output reg        rv_req_ack,   // ready for new requests. read data available on NEXT mclk
     input             rv_we,
 
-    // Save-RAM client: byte accesses into banks 0/1. sv_req is a toggle from the
-    // async iosys clock domain (2FF-synced here) and sv_ack toggles once per
-    // completed transaction; a level copy of req would let a mid-frame toggle
-    // steal an ack for a request that never rode a frame. Lowest priority in the
-    // CPU/PPU slot: every game request wins and this one retries later. Read
-    // data is valid by cycle[4] of the transaction frame, a few fclk after ack.
+    // Save-RAM client: byte accesses into banks 0/1. sv_req is a level from the
+    // async iosys clock domain (2FF-synced here); the client flips it to ask
+    // for one transaction and sv_ack follows it once that transaction rides a
+    // frame, so the pair is idle exactly when the two levels agree -- the same
+    // shape as the RV port. Lowest priority in the CPU/PPU slot: every game
+    // request wins and this one retries later. Read data is valid by cycle[4]
+    // of the transaction frame, a few fclk after ack.
     input      [21:0] sv_addr,      // byte address, banks 0/1
     input       [7:0] sv_din,       // byte access, DQM selects the lane
     input             sv_we,
-    input             sv_req,       // toggle, async to clk
-    output reg        sv_ack,       // toggle, clk domain
+    input             sv_req,       // level, async to clk
+    output reg        sv_ack,       // follows sv_req per served transaction, clk domain
     output reg  [7:0] sv_dout
 );
 
@@ -139,19 +140,19 @@ reg oeA_d, oeB_d, weA_d, weB_d;
 wire reqA = (~oeA_d & oeA) || (~weA_d & weA);
 wire reqB = (~oeB_d & oeB) || (~weB_d & weB);
 
-// Save channel request: sv_req is a toggle in the (async) iosys domain.
-// One transaction per sync'ed edge; sv_req_q is the level arbitration sees.
+// Save channel request: sv_req is a level in the (async) iosys domain; the
+// 2FF synchroniser's output is the level arbitration sees. It is compared
+// against sv_ack as a level all the way through, so a synchroniser that
+// resolves one edge late only delays the transaction -- with the previous
+// edge-capture register here (and the matching edge detect in iosys) a lost
+// or duplicated transition could disagree with the iosys side forever.
 reg [1:0] sv_req_s = 2'b00;
-reg       sv_req_q = 1'b0;
+wire      sv_req_q = sv_req_s[1];
 always @(posedge clk) begin
-    if (!resetn) begin
+    if (!resetn)
         sv_req_s <= 2'b00;
-        sv_req_q <= 1'b0;
-    end else begin
+    else
         sv_req_s <= {sv_req_s[0], sv_req};
-        if (sv_req_s[1] ^ sv_req_s[0])
-            sv_req_q <= sv_req_s[0];       // s[0] holds the NEW value; s[1] is the old one
-    end
 end
 
 reg clkref_r;
@@ -228,7 +229,7 @@ always @(posedge clk) begin
         SDRAM_DQM <= {DQM_SIZE{1'b1}};
         normal <= 0;
         setup <= 0;
-        sv_ack <= 0;            // sv_req_s/sv_req_q reset in their own always block
+        sv_ack <= 0;            // sv_req_s reset in its own always block
     end else begin
         // defaults
         dq_oen <= 1'b1;
@@ -319,8 +320,11 @@ always @(posedge clk) begin
 
             // Save-RAM ack: its transaction rode the CPU/PPU slot; CAS is cycle[1],
             // so by cycle[2] the request is on the wire and a new one is allowed.
-            // Toggle (not copy) so two req edges can never collapse into one ack.
-            if (cycle[2] && port[0] == PORT_SAVE) sv_ack <= ~sv_ack;
+            // The ack follows the (synchronised) request level, like the RV
+            // port's rv_req_ack: parity between the two domains is restored by
+            // every served transaction instead of depending on both sides
+            // counting the same number of toggles.
+            if (cycle[2] && port[0] == PORT_SAVE) sv_ack <= sv_req_q;
 
             // CAS
             // CPU, PPU

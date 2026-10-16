@@ -28,3 +28,10 @@ grep -q "JOY_UPDATE_INTERVAL = 10_000" iosys_sys_sim.v
 iverilog -g2012 -DSIM -o tb_system_save.out \
     tb_system_save.v sdram_nes_sim.v iosys_sys_sim.v $RTL/iosys/uart_fixed.v
 vvp tb_system_save.out
+# Link soak: menu-pause dumps at every clk/fclk phase, then a lost save
+# acknowledgement injected into the engine -- the link must carry on.
+for phase in 0 1 2; do
+    iverilog -g2012 -DSIM -Ptb_link_soak.PHASE=$phase -o tb_link_soak.out \
+        tb_link_soak.v sdram_nes_sim.v iosys_sys_sim.v $RTL/iosys/uart_fixed.v
+    vvp tb_link_soak.out
+done

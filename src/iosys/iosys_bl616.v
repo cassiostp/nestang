@@ -191,13 +191,22 @@ reg sv_we_b = 0;                    // dpram write strobe (SAVE_SYNC=1)
 reg sv_wr_stb = 0;                  // pulses (SAVE_SYNC=0): RX byte for the engine,
 reg sv_rd_stb = 0;                  // read sv_raddr please,
 reg sv_data_taken = 0;              // TX consumed the read data
+reg sv_abort_stb = 0;               // TX gave up on a block: resync the engine
 reg [SAVE_AW-1:0] sv_addr_e = 0;    // the engine's port, when SAVE_SYNC=0
 reg [7:0]         sv_din_e = 0;     // captured at stb, so a late commit can't grab
 reg               sv_we_e = 0;      // the NEXT UART byte's data
 reg  [7:0]          sv_din_rx = 0;    // RX-side data register (dpram path)
-reg               sv_wr_pend = 0, sv_rd_pend = 0, sv_data_rdy = 0, sv_ack_d = 0;
+reg               sv_wr_pend = 0, sv_rd_pend = 0, sv_data_rdy = 0;
 reg  [1:0]        sv_ack_s = 0;     // 2FF sync of sv_ack (sdram_nes fclk domain)
 reg  [4:0]        sv_rd_lat = 0;    // read-data settle countdown
+reg               sv_rd_out = 0;    // a read is issued and its data not yet taken
+reg               sv_resync = 0;    // dummy read in flight to restore req/ack parity
+reg [SAVE_AW-1:0] sv_waddr_p = 0;   // write address captured at sv_wr_stb
+reg [13:0]        sv_wait = 0;      // TX's per-byte wait for sv_data_rdy (SEND_SAVE_BLK)
+// Longest a byte fetch may take before TX abandons the block frame. A real
+// fetch is a few microseconds even under game traffic (2FF sync each way, an
+// SDRAM frame, the 24-clk settle); this is ~0.76 ms at 21.5 MHz.
+localparam [13:0] SV_WAIT_MAX = 14'h3fff;
 
 assign sv_addr = SAVE_SYNC ? (sv_we_b ? sv_waddr : sv_raddr) : sv_addr_e;
 assign sv_we   = SAVE_SYNC ? sv_we_b : sv_we_e;
@@ -205,13 +214,21 @@ assign sv_din  = SAVE_SYNC ? sv_din_rx : sv_din_e;
 
 // ---- save-RAM access engine (SAVE_SYNC=0): one req/ack client of sdram_nes.
 // Writes (the restore stream) win over reads (the dump); the MCU never does both
-// at once. sdram_nes answers the ack when the byte is on the wire; for a read,
-// sv_q follows a few clocks later, far inside one UART byte (2 Mbaud = ~107 clk).
+// at once. sdram_nes sets the ack to the request level when the byte is on the
+// wire; for a read, sv_q follows a few clocks later, far inside one UART byte
+// (2 Mbaud = ~107 clk).
+// The handshake is level-based at both ends -- the engine issues when the
+// synchronised ack level equals its request level, and read data counts as
+// ready while that equality holds for an issued read -- so no single toggle
+// is ever load-bearing: a crossing that drops or duplicates an edge delays a
+// byte, it cannot park TX in SEND_SAVE_BLK forever. That wait is also bounded
+// (SV_WAIT_MAX, in the TX block): a byte that never lands abandons the frame
+// and lands here as sv_abort_stb, which drops the read and runs one dummy
+// read so req/ack parity is rebuilt whatever state the crossing was left in.
 always @(posedge clk) begin
     if (!resetn) begin
         sv_req <= 0;
         sv_ack_s <= 0;
-        sv_ack_d <= 0;
         sv_rd_lat <= 0;
         sv_wr_pend <= 0;
         sv_rd_pend <= 0;
@@ -219,35 +236,70 @@ always @(posedge clk) begin
         sv_addr_e <= 0;
         sv_din_e <= 0;
         sv_we_e <= 0;
+        sv_rd_out <= 0;
+        sv_resync <= 0;
+        sv_waddr_p <= 0;
     end else if (SAVE_IF && !SAVE_SYNC) begin
-        sv_ack_s <= {sv_ack_s[0], sv_ack};     // sdram_nes toggles ack in fclk domain
-        sv_ack_d <= sv_ack_s[1];
-        if (sv_wr_stb) begin
-            sv_wr_pend <= 1;
-            sv_din_e <= sv_din_rx;        // hold this byte until the write commits
-        end
-        if (sv_rd_stb)  sv_rd_pend <= 1;
-        // a read completes at cycle[4] of its frame, a few fclk after the ack;
-        // the countdown (≪ one UART byte) keeps TX from sampling a stale sv_q
-        if (sv_ack_s[1] != sv_ack_d && !sv_we_e)
-            sv_rd_lat <= 5'd24;
-        else if (sv_rd_lat != 0) begin
-            sv_rd_lat <= sv_rd_lat - 1'd1;
-            if (sv_rd_lat == 5'd1) sv_data_rdy <= 1;
-        end
-        if (sv_data_taken) sv_data_rdy <= 0;
-        if (sv_req == sv_ack_s[1]) begin          // bus empty: issue one transaction
-            if (sv_wr_pend) begin
-                sv_wr_pend <= 0;
-                sv_addr_e <= sv_waddr;
-                sv_we_e   <= 1;
-                sv_req    <= ~sv_req;
-            end else if (sv_rd_pend) begin
-                sv_rd_pend <= 0;
-                sv_addr_e <= sv_raddr;
-                sv_we_e   <= 0;
-                sv_req    <= ~sv_req;
+        sv_ack_s <= {sv_ack_s[0], sv_ack};     // sdram_nes drives ack in fclk domain
+        if (sv_abort_stb) begin
+            // TX abandoned a block (see SEND_SAVE_BLK): forget the read and
+            // issue one dummy read. sdram_nes answers any request level it
+            // has not acked, so after this the levels agree again even if a
+            // toggle was lost or duplicated on the way across.
+            sv_rd_pend <= 0;
+            sv_rd_out <= 0;
+            sv_data_rdy <= 0;
+            sv_rd_lat <= 0;
+            sv_resync <= 1;
+            sv_addr_e <= 0;
+            sv_we_e   <= 0;
+            sv_req    <= ~sv_req;
+            if (sv_wr_stb) begin
+                sv_wr_pend <= 1;
+                sv_din_e <= sv_din_rx;
+                sv_waddr_p <= sv_waddr;
             end
+        end else begin
+            // Read data is ready while the ack level has caught up with an
+            // issued read: a read completes at cycle[4] of its frame, a few
+            // fclk after the ack, so hold ready back by the settle countdown
+            // (<< one UART byte) once the levels match.
+            if (sv_resync && sv_req == sv_ack_s[1])
+                sv_resync <= 0;
+            if (sv_rd_out && sv_req == sv_ack_s[1]) begin
+                if (sv_rd_lat != 0)
+                    sv_rd_lat <= sv_rd_lat - 1'd1;
+                else
+                    sv_data_rdy <= 1;
+            end
+            if (sv_data_taken) begin
+                sv_data_rdy <= 0;
+                sv_rd_out <= 0;
+            end
+            if (!sv_resync && sv_req == sv_ack_s[1]) begin  // bus empty: issue one
+                if (sv_wr_pend) begin
+                    sv_wr_pend <= 0;
+                    sv_addr_e <= sv_waddr_p;
+                    sv_we_e   <= 1;
+                    sv_req    <= ~sv_req;
+                end else if (sv_rd_pend) begin
+                    sv_rd_pend <= 0;
+                    sv_addr_e <= sv_raddr;
+                    sv_we_e   <= 0;
+                    sv_rd_out <= 1;
+                    sv_rd_lat <= 5'd24;
+                    sv_req    <= ~sv_req;
+                end
+            end
+            // Strobes are captured after the issue logic, so a strobe that
+            // lands in the very cycle its predecessor issues is not lost:
+            // the pending bit (and the captured byte/address) stays set.
+            if (sv_wr_stb) begin
+                sv_wr_pend <= 1;
+                sv_din_e <= sv_din_rx;        // hold this byte until the write commits
+                sv_waddr_p <= sv_waddr;       // ...at the address it arrived for
+            end
+            if (sv_rd_stb)  sv_rd_pend <= 1;
         end
     end
 end
@@ -513,6 +565,8 @@ always @(posedge clk) begin
         sv_rd_ack <= 0;
         sv_rd_stb <= 0;
         sv_data_taken <= 0;
+        sv_abort_stb <= 0;
+        sv_wait <= 0;
     end else begin
         tx_valid <= 0;
         mgmt_read <= 0;
@@ -520,6 +574,7 @@ always @(posedge clk) begin
         fdd_write_finish <= 0;
         sv_rd_stb <= 0;
         sv_data_taken <= 0;
+        sv_abort_stb <= 0;
         
         // Joypad state transmission logic
         joy_timer <= joy_timer == 0 ? 0 : joy_timer - 1;
@@ -686,10 +741,25 @@ always @(posedge clk) begin
             // SAVE_SYNC=1 the next byte's read is issued as each one is sent; the UART
             // takes over 100 clocks per byte, so the RAM's one-cycle latency is never on
             // the critical path. With SAVE_SYNC=0 each byte waits on the SDRAM engine's
-            // sv_data_rdy, which also completes long before the UART asks again.
+            // sv_data_rdy, which also completes long before the UART asks again. The
+            // wait is bounded: a byte that does not land within SV_WAIT_MAX abandons
+            // the frame (the firmware resyncs on the mid-frame gap and retries the
+            // dump) and asks the engine to resync, so the link itself carries on --
+            // core-ID replies and joypad frames are never held hostage by a save
+            // fetch that lost its acknowledgement on the clk/fclk crossing.
             SEND_SAVE_BLK: begin
+                if (SAVE_IF && !SAVE_SYNC && sv_idx >= 2 && !sv_data_rdy) begin
+                    if (sv_wait == SV_WAIT_MAX) begin
+                        send_state <= SEND_IDLE;
+                        sv_rd_ack <= sv_rd_req;
+                        sv_abort_stb <= 1;
+                        sv_wait <= 0;
+                    end else
+                        sv_wait <= sv_wait + 1'd1;
+                end
                 if (SAVE_IF && tx_ready && ~tx_valid &&
                         (sv_idx < 2 || (SAVE_SYNC ? 1'b1 : sv_data_rdy))) begin
+                    sv_wait <= 0;
                     if (sv_idx == 0)      tx_data <= sv_req_blk[15:8];
                     else if (sv_idx == 1) tx_data <= sv_req_blk[7:0];
                     else begin
@@ -720,6 +790,8 @@ always @(posedge clk) begin
             end
 
             SEND_DONE: send_state <= SEND_IDLE;     // extra state for fdd_state to transition
+
+            default: send_state <= SEND_IDLE;       // no state may park TX
         endcase
     end
 end
