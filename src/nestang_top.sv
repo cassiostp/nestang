@@ -124,7 +124,7 @@ wire [31:0] core_config;      // from iosys
 wire [31:0] video_config;     // from iosys
 wire pause = core_config[17]; // freeze the machine while the game menu is open
 wire frame_halt;              // from nes2hdmi: frame-lock halt, ORed with pause
-wire video_std_timing = 1'b0; // 0: native NES-rate HDMI (1647-pixel lines); 1: standard 60 Hz, for displays that refuse it
+wire video_std_timing = 1'b1; // 0: native NES-rate HDMI (1647-pixel lines); 1: standard 60 Hz, for displays that refuse it
 `ifdef VERILATOR
 assign frame_halt = 1'b0; // no nes2hdmi under Verilator: no frame lock
 `endif
