@@ -399,7 +399,7 @@ wire [7:0]  overlay_y;
 wire [14:0] overlay_color;      // BGR5
 
 // HDMI output
-nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=01100_00000_01000
+nes2hdmi #(.SMOOTH_EN(1'b0)) u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=01100_00000_01000
     .clk(clk), .resetn(sys_resetn),
     .color(color), .cycle(cycle), 
     .scanline(scanline), .sample(pause ? 16'd0 : {~sample[15], sample[14:0]}),  // offset-binary to signed; silent while paused

@@ -3,7 +3,11 @@
 
 `timescale 1ns / 1ps
 
-module nes2hdmi (
+module nes2hdmi #(
+    // 0 compiles the smoothing blend out (nearest-neighbour); the BFI test
+    // build does this because the blend is the 148.5 MHz critical path
+    parameter bit SMOOTH_EN = 1'b1
+) (
 	input clk,      // nes clock
 	input resetn,
 
@@ -392,9 +396,7 @@ always @(posedge clk_pixel) begin
 end
 
 smooth sm (
-    // BFI test build: smoothing compiled out (its blend is the 148.5 MHz
-    // critical path); the picture is nearest-neighbour in this build
-    .clk(clk_pixel), .cy(cy), .cfg(2'd0), .mode(sm_mode),
+    .clk(clk_pixel), .cy(cy), .cfg(SMOOTH_EN ? video_config[19:18] : 2'd0), .mode(sm_mode),
     .rd_b(sm_rd_b), .rd_rgb(pal_q), .col_new(cn2), .wx(wx), .hnext(hnext), .wy(wy),
     .rgb_out(sm_rgb)
 );
