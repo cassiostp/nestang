@@ -21,7 +21,7 @@ module hdmi
 
     // Defaults to minimum bit lengths required to represent positions.
     // Modify these parameters if you have alternate desired bit lengths.
-    parameter int BIT_WIDTH = VIDEO_ID_CODE < 4 ? 10 : VIDEO_ID_CODE == 4 ? 11 : 12,
+    parameter int BIT_WIDTH = VIDEO_ID_CODE < 4 ? 10 : VIDEO_ID_CODE == 4 || VIDEO_ID_CODE == 47 ? 11 : 12,
     parameter int BIT_HEIGHT = VIDEO_ID_CODE == 16 ? 11: 10,
 
     // A true HDMI signal sends auxiliary data (i.e. audio, preambles) which prevents it from being parsed by DVI signal sinks.
@@ -62,8 +62,9 @@ module hdmi
     parameter int START_X = 0,
     parameter int START_Y = 0,
 
-    // Native console frame rate: when std_timing is 1 the 720p mode (VIC 4)
-    // uses the standard 1650 x 750 timing; when 0 it uses
+    // Native console frame rate: when std_timing is 1 the 720p modes (VIC 4
+    // and VIC 47, the same timing at twice the pixel clock) use the
+    // standard 1650 x 750 timing; when 0 they use
     // NATIVE_FRAME_WIDTH x 750, a line a few pixels longer or shorter that
     // runs the HDMI output at the console's own refresh rate. Only the line
     // length changes; the sync pulse start/size and polarity stay the 720p
@@ -135,7 +136,7 @@ generate
             assign vsync_pulse_size = 6;
             assign invert = 1;
             end
-        4:
+        4, 47:  // 720p60 and 720p120 share the 1650x750 timing; the pixel clock differs
         begin
             assign frame_width = std_timing ? 1650 : NATIVE_FRAME_WIDTH;
             assign frame_height = 750;
@@ -213,6 +214,7 @@ end
 localparam real VIDEO_RATE = (VIDEO_ID_CODE == 1 ? 25.2E6
     : VIDEO_ID_CODE == 2 || VIDEO_ID_CODE == 3 ? 27.027E6
     : VIDEO_ID_CODE == 4 ? 74.25E6
+    : VIDEO_ID_CODE == 47 ? 148.5E6
     : VIDEO_ID_CODE == 16 ? 148.5E6
     : VIDEO_ID_CODE == 17 || VIDEO_ID_CODE == 18 ? 27E6
     : VIDEO_ID_CODE == 19 ? 74.25E6

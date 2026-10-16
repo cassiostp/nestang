@@ -80,7 +80,7 @@ PLL PLL_inst (
 defparam PLL_inst.FCLKIN = "27";
 defparam PLL_inst.IDIV_SEL = 1;
 defparam PLL_inst.FBDIV_SEL = 1;
-defparam PLL_inst.ODIV0_SEL = 4;
+defparam PLL_inst.ODIV0_SEL = 2;    // BFI: 27 MHz x 55 / 2 = 742.5 MHz (720p120 x5 clock)
 defparam PLL_inst.ODIV1_SEL = 8;
 defparam PLL_inst.ODIV2_SEL = 8;
 defparam PLL_inst.ODIV3_SEL = 8;

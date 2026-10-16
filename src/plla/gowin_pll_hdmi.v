@@ -60,7 +60,7 @@ defparam PLLA_inst.FCLKIN = "27";
 defparam PLLA_inst.IDIV_SEL = 1;
 defparam PLLA_inst.FBDIV_SEL = 1;
 defparam PLLA_inst.CLKFB_SEL = "INTERNAL";
-defparam PLLA_inst.ODIV0_SEL = 4;
+defparam PLLA_inst.ODIV0_SEL = 2;    // BFI: 27 MHz x 55 / 2 = 742.5 MHz (720p120 x5 clock)
 defparam PLLA_inst.ODIV0_FRAC_SEL = 0;
 defparam PLLA_inst.ODIV1_SEL = 8;
 defparam PLLA_inst.ODIV2_SEL = 8;
