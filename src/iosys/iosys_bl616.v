@@ -552,6 +552,12 @@ reg [$clog2(JOY_UPDATE_INTERVAL+1)-1:0] joy_timer;
 reg [15:0] joy1_reg;
 reg [15:0] joy2_reg;
 reg [15:0] resp_frame_len;
+// Frame watchdog: every UART frame emits a byte at least every ~110 clk
+// (the transmitter's own pace; the save-block byte wait abandons far sooner
+// than this), so ~12 ms without a byte means the transmitter path itself is
+// wedged. Drop back to idle, acknowledge whatever TX owed, and let the
+// firmware's gap resync + next poll carry on.
+reg [17:0] tx_wdog = 0;
 
 // UART TX: command responses, joystick updates and FDD requests
 always @(posedge clk) begin
@@ -567,6 +573,7 @@ always @(posedge clk) begin
         sv_data_taken <= 0;
         sv_abort_stb <= 0;
         sv_wait <= 0;
+        tx_wdog <= 0;
     end else begin
         tx_valid <= 0;
         mgmt_read <= 0;
@@ -588,7 +595,20 @@ always @(posedge clk) begin
             sv_dirty <= 1;
         end
 
-        // UART transmission state machine
+        // UART transmission state machine (watchdog first: no frame, and no
+        // state, may hold the link without emitting a byte)
+        if (send_state == SEND_IDLE || tx_valid)
+            tx_wdog <= 0;
+        else if (&tx_wdog) begin
+            send_state <= SEND_IDLE;
+            response_ack <= response_req;
+            if (SAVE_IF && !SAVE_SYNC && send_state == SEND_SAVE_BLK)
+                sv_abort_stb <= 1;
+            if (SAVE_IF)
+                sv_rd_ack <= sv_rd_req;
+            tx_wdog <= 0;
+        end else
+            tx_wdog <= tx_wdog + 1'd1;
         case (send_state)
             SEND_IDLE: begin
                 send_idx <= 0;
