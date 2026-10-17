@@ -285,8 +285,15 @@ generate
 
         logic data_island_period_instantaneous;
         assign data_island_period_instantaneous = num_packets_alongside > 0 && cx >= screen_width + 14 && cx < screen_width + 14 + num_packets_alongside * 32;
-        logic packet_enable;
-        assign packet_enable = data_island_period_instantaneous && 5'(cx + screen_width + 18) == 5'd0;
+        // Registered, computed from next cycle's cx: as a combinational cx
+        // decode it was the pixel domain's longest control path at
+        // 148.5 MHz (into the picker's enable pins). Same value each cycle.
+        logic [BIT_WIDTH-1:0] cx_next;
+        assign cx_next = cx == frame_width-1'b1 ? BIT_WIDTH'(0) : cx + 1'b1;
+        logic packet_enable = 1'b0;
+        always_ff @(posedge clk_pixel)
+            packet_enable <= reset ? 1'b0
+                : num_packets_alongside > 0 && cx_next >= screen_width + 14 && cx_next < screen_width + 14 + num_packets_alongside * 32 && 5'(cx_next + screen_width + 18) == 5'd0;
 
         logic data_island_guard = 0;
         logic data_island_preamble = 0;
