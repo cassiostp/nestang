@@ -14,6 +14,9 @@ module fl_top (
     output [8:0] scanline,
     output [8:0] nes_cycle,
     output [9:0] cy,
+    output [10:0] cx,
+    output bfi_ins,
+    output [23:0] rgb_out,
     output memA_we,
     output [15:0] memA_addr,
     output [15:0] memB_addr,
@@ -93,7 +96,8 @@ module fl_top (
         .sample(sample_tb), .aspect_8x7(1'b0),
         .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(1'b0),
         .video_config(32'd0),
-        .std_timing(1'b0),      // native NES rate, as in hardware
+        .std_timing(1'b0),      // native NES rate x2, as in hardware
+        .bfi_mode(2'd1),        // black inserted frame, as in the test build
         .overlay(1'b0), .overlay_x(overlay_x), .overlay_y(overlay_y),
         .overlay_color(15'd0),
         .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
@@ -104,6 +108,9 @@ module fl_top (
 
     // taps for the harness
     assign cy = dut.cy;
+    assign cx = dut.cx;
+    assign bfi_ins = dut.bfi_ins;
+    assign rgb_out = dut.rgb;
     assign memA_we = dut.mem_portA_we;
     assign memA_addr = dut.mem_portA_addr;
     assign memB_addr = dut.mem_portB_addr;

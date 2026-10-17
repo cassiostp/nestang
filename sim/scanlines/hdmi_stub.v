@@ -12,17 +12,17 @@ module hdmi #(
     parameter START_X = 0,
     parameter START_Y = 0,
     // Same native-timing interface as the real hdmi (see src/hdmi2/hdmi.sv).
-    // The default is the NES native width, not the real module's 1650: the
-    // prep.sh baselines predate the parameter and must run the same line as
-    // the DUT, or the clock-for-clock regress comparisons would drift apart.
-    parameter NATIVE_FRAME_WIDTH = 1647
+    // The default is the NES native 480p120 width: the prep.sh baselines
+    // predate the parameter and must run the same line as the DUT, or the
+    // clock-for-clock regress comparisons would drift apart.
+    parameter NATIVE_FRAME_WIDTH = 855
 ) (
     input         clk_pixel_x5,
     input         clk_pixel,
     input         clk_audio,
     input  [23:0] rgb,
     input         reset,
-    // 1: standard 720p timing; anything else (0, or Z from a baseline that
+    // 1: standard 480p120 timing; anything else (0, or Z from a baseline that
     // predates the port): native width. Case-equality keeps Z on native.
     input         std_timing,
     input  [15:0] audio_sample_word [1:0],
@@ -33,15 +33,15 @@ module hdmi #(
     output [10:0] frame_width,
     output [9:0]  frame_height
 );
-    wire [10:0] line_w = (std_timing === 1'b1) ? 11'd1650 : NATIVE_FRAME_WIDTH;
+    wire [10:0] line_w = (std_timing === 1'b1) ? 11'd858 : NATIVE_FRAME_WIDTH;
     assign frame_width = line_w;
-    assign frame_height = 750;
+    assign frame_height = 525;
     assign tmds = 3'b0;
     assign tmds_clock = 1'b0;
     always @(posedge clk_pixel) begin
         cx <= (cx == line_w - 11'd1) ? 11'd0 : cx + 11'd1;
         if (cx == line_w - 11'd1)
-            cy <= (cy == 10'd749) ? 10'd0 : cy + 10'd1;
+            cy <= (cy == 10'd524) ? 10'd0 : cy + 10'd1;
     end
 endmodule
 

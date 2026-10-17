@@ -60,7 +60,7 @@ defparam PLLA_inst.FCLKIN = "27";
 defparam PLLA_inst.IDIV_SEL = 1;
 defparam PLLA_inst.FBDIV_SEL = 1;
 defparam PLLA_inst.CLKFB_SEL = "INTERNAL";
-defparam PLLA_inst.ODIV0_SEL = 4;
+defparam PLLA_inst.ODIV0_SEL = 4;    // BFI 480p120: 27 MHz x 40 / 4 = 270 MHz (x5 clock, VCO 1080 MHz in range)
 defparam PLLA_inst.ODIV0_FRAC_SEL = 0;
 defparam PLLA_inst.ODIV1_SEL = 8;
 defparam PLLA_inst.ODIV2_SEL = 8;
@@ -68,7 +68,7 @@ defparam PLLA_inst.ODIV3_SEL = 8;
 defparam PLLA_inst.ODIV4_SEL = 8;
 defparam PLLA_inst.ODIV5_SEL = 8;
 defparam PLLA_inst.ODIV6_SEL = 8;
-defparam PLLA_inst.MDIV_SEL = 55;
+defparam PLLA_inst.MDIV_SEL = 40;
 defparam PLLA_inst.MDIV_FRAC_SEL = 0;
 defparam PLLA_inst.CLKOUT0_EN = "TRUE";
 defparam PLLA_inst.CLKOUT1_EN = "FALSE";
