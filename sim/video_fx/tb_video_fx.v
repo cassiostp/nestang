@@ -10,7 +10,7 @@
 
 module tb_video_fx;
 
-    localparam FX_LAT = 12;
+    localparam FX_LAT = 13;
 
     reg clk = 0;
     always #6.734 clk = ~clk;                   // 74.25 MHz

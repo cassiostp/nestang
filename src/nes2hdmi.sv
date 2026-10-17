@@ -288,7 +288,7 @@ wire [11:0] XSTOP  = (12'd1280 + XSIZE) >> 1;
 // starts SM_LAT clocks earlier still. The xx/xcnt counters run with it; the overlay lookup
 // address (xx_ov) and `active` are delayed back by SM_LAT, so the picture, the overlay and
 // the border land where they did.
-localparam FX_LAT = 12;     // clocks from rgb_pre to rgb, see video_fx.v
+localparam FX_LAT = 13;     // clocks from rgb_pre to rgb, see video_fx.v
 localparam SM_LAT = 9;      // the palette lookup is followed by smooth.v (LAT 8) and the rgb_pre register
 reg cnew = 1'b0;            // the frame buffer address is the first of a source column
 always @(posedge clk_pixel) begin
