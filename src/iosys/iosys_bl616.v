@@ -145,14 +145,16 @@ reg [6:0] recv_state = RECV_IDLE;
 
 // Inter-byte timeout: a frame's bytes arrive back to back at 2 Mbaud
 // (~5 us apart, streamed from the MCU's TX FIFO inside one critical
-// section), so 1 ms without a byte mid-frame means the stream desynced
-// -- a byte dropped or flipped on the wire, or raw bytes spliced in --
-// and the length being counted down is garbage. Abandon the partial
-// frame (the same resync the firmware's parser does on its side)
+// section), so a millisecond without a byte mid-frame means the
+// stream desynced -- a byte dropped or flipped on the wire, or raw
+// bytes spliced in -- and the length being counted down is garbage.
+// Abandon the partial frame (the same resync the firmware's parser does on its side)
 // instead of swallowing core-ID polls as parameters for up to 2047
 // bytes, which at the in-game poll rate deafens the link for minutes.
-localparam integer RX_GAP_MAX = FREQ / 1000;   // 1 ms
-reg [$clog2(RX_GAP_MAX+1)-1:0] rx_gap = 0;
+// 2^14 clocks is 0.3-1.5 ms across the cores' iosys clocks: keep the
+// bound a power of two so the check is the counter's top bit, not a
+// comparator on the state machine's clock enable.
+reg [14:0] rx_gap = 0;
 
 // UART command buffer
 reg [7:0] cmd_reg;
@@ -386,7 +388,7 @@ always @(posedge clk) begin
 
         if (rx_valid || recv_state == RECV_IDLE)
             rx_gap <= 0;
-        else if (rx_gap == RX_GAP_MAX) begin
+        else if (rx_gap[14]) begin
             recv_state <= RECV_IDLE;   // desynced partial frame: drop it
             rx_gap <= 0;
         end else
