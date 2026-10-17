@@ -4,23 +4,22 @@
 //   [16]    scanlines on
 //   [19:18] darkness of a scanline row: 0 = 25 %, 1 = 50 %, 2 = 75 %, 3 = 100 % (black)
 //   [20]    thickness: 0 = thin, 1 = thick
-//   [21]    mode: 0 = integer scale (default), 1 = output rows
+//   [21]    scale: 0 = integer, 1 = full (the Video menu's Scale setting)
 //
-// Integer scale (the default). Every source line is scaled by the same whole
+// Integer scale. Every source line is scaled by the same whole
 // number of output rows, `rows`, so the lines are evenly spaced. The picture is
 // centred vertically with a border above and below it. The last `dark_thin`
 // (thin) or `dark_thick` (thick) rows of each source line are darkened.
 //
-// Output rows. The picture keeps the scaler's normal geometry. The 720p rows
+// Full scale. The picture keeps the scaler's normal geometry. The 720p rows
 // are counted from the top of the frame and the last `dark_*` rows of every
 // `rows` output rows are darkened, whatever source line they show. The dark
 // rows are evenly spaced, but they beat against content that isn't scaled by
 // exactly `rows`.
 //
 // The LCD grid (video_fx.v) needs the integer scale too: with cfg_grid set
-// the frame uses it even when the scanlines are off or in output rows mode,
-// and `last` marks the last output row of every source line. The scanline
-// darkening is not affected.
+// the frame uses it even in full mode, and `last` marks the last output row
+// of every source line. The scanline darkening is not affected.
 //
 // sl_rows follows the output row (cy) and says, for the row being drawn,
 // which source line it shows, whether it is inside the picture, whether it
@@ -84,7 +83,7 @@ module sl_rows (
     always @(posedge clk) begin
         cy0_r <= cy[0];
         if (cy == 10'd0) begin      // the first row: take the settings for this frame
-            geom    <= (s_on & ~s_out | s_grid) & ~s_hide;
+            geom    <= (~s_out | s_grid) & ~s_hide;
             smode   <= s_on & ~s_out & ~s_hide;
             omode   <= s_on &  s_out & ~s_hide;
             rows_l  <= rows;
