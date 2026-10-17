@@ -18,7 +18,12 @@ git show $BASE:src/nes2hdmi.sv | sed \
 git show $BASE:src/scanlines.v | sed \
     -e 's/^module sl_rows (/module sl_rows_base (/' \
     -e 's/^module sl_dim (/module sl_dim_base (/' > build/scanlines_base.v
-git show $FXBASE:src/nes2hdmi.sv | sed -e 's/^module nes2hdmi (/module nes2hdmi_fx (/' > build/nes2hdmi_fx.sv
+# the baseline scaler is compiled with today's video_fx, so its FX_LAT (the
+# start offset for that module's latency) must be today's, not $FXBASE's
+FXLAT=$(sed -n 's/.*localparam FX_LAT = \([0-9]*\);.*/\1/p' ../../src/video_fx.v)
+git show $FXBASE:src/nes2hdmi.sv | sed -e 's/^module nes2hdmi (/module nes2hdmi_fx (/' \
+    -e "s/^localparam FX_LAT = [0-9]*;/localparam FX_LAT = $FXLAT;/" > build/nes2hdmi_fx.sv
+grep -q "^localparam FX_LAT = $FXLAT;" build/nes2hdmi_fx.sv
 grep -q '^module nes2hdmi_fx (' build/nes2hdmi_fx.sv
 grep -q '^module nes2hdmi_base (' build/nes2hdmi_base.sv
 grep -q '^sl_rows_base sl (' build/nes2hdmi_base.sv
