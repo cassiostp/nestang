@@ -416,7 +416,14 @@ nes2hdmi #(.SMOOTH_EN(1'b0)) u_hdmi (     // purple: RGB=440064 (010001000_00000
 
 
 // Connect to BL616 companion MCU for sys module for menu, rom loading...
-iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(21_492_000), .CORE_ID(1),
+// clk is the PLL's fclk/3 output: 50*40/93 MHz on the 138K boards,
+// 50*49/(2*57) MHz on the 60K/25K ones. FREQ feeds iosys's UART baud divider.
+`ifdef MEGA138K
+localparam IOSYS_FREQ = 21_505_376;
+`else
+localparam IOSYS_FREQ = 21_491_228;
+`endif
+iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(IOSYS_FREQ), .CORE_ID(1),
               .SAVE_IF(1), .SAVE_AW(13), .SAVE_SYNC(0) )     // purple nestang logo
     sys_inst (
     .clk(clk), .hclk(hclk), .resetn(sys_resetn),
