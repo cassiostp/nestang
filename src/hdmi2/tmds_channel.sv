@@ -65,22 +65,27 @@ begin
     data_island_data_1 <= data_island_data;
 end
 
-// stage 2: the count of ones in the registered q_m (same power-up values)
+// stage 2: the count of ones in the registered q_m, and with it the
+// disparity difference N1 - N0 (= 2*N1 - 8) and its sign, so stage 3 has
+// no subtractor between the count registers and the output (same
+// power-up values: q_m of video_data = 0 has no ones in bits 7:0)
 logic [3:0] N1q_m;
 always_comb
     N1q_m = q_m_1[0] + q_m_1[1] + q_m_1[2] + q_m_1[3] + q_m_1[4] + q_m_1[5] + q_m_1[6] + q_m_1[7];
 
 logic [8:0] q_m_r = 9'b100000000;
-logic signed [4:0] N1q_m07 = 5'sd0;
-logic signed [4:0] N0q_m07 = 5'sd8;
+logic signed [4:0] diff07 = -5'sd8;
+logic gt07 = 1'b0;
+logic eq07 = 1'b0;
 logic [2:0] mode_r = 3'd1;
 logic [1:0] control_data_r = 2'd0;
 logic [3:0] data_island_data_r = 4'd0;
 always_ff @(posedge clk_pixel)
 begin
     q_m_r <= q_m_1;
-    N1q_m07 <= {1'b0, N1q_m};
-    N0q_m07 <= 5'sd8 - {1'b0, N1q_m};
+    diff07 <= $signed({2'b00, N1q_m, 1'b0}) - 6'sd8;
+    gt07 <= N1q_m > 4'd4;
+    eq07 <= N1q_m == 4'd4;
     mode_r <= mode_1;
     control_data_r <= control_data_1;
     data_island_data_r <= data_island_data_1;
@@ -95,30 +100,30 @@ logic signed [4:0] acc_add;
 
 always_comb
 begin
-    if (acc == 5'sd0 || (N1q_m07 == N0q_m07))
+    if (acc == 5'sd0 || eq07)
     begin
         if (q_m_r[8])
         begin
-            acc_add = N1q_m07 - N0q_m07;
+            acc_add = diff07;
             q_out = {~q_m_r[8], q_m_r[8], q_m_r[7:0]};
         end
         else
         begin
-            acc_add = N0q_m07 - N1q_m07;
+            acc_add = -diff07;
             q_out = {~q_m_r[8], q_m_r[8], ~q_m_r[7:0]};
         end
     end
     else
     begin
-        if ((acc > 5'sd0 && N1q_m07 > N0q_m07) || (acc < 5'sd0 && N1q_m07 < N0q_m07))
+        if ((acc > 5'sd0 && gt07) || (acc < 5'sd0 && !gt07 && !eq07))
         begin
             q_out = {1'b1, q_m_r[8], ~q_m_r[7:0]};
-            acc_add = (N0q_m07 - N1q_m07) + (q_m_r[8] ? 5'sd2 : 5'sd0);
+            acc_add = -diff07 + (q_m_r[8] ? 5'sd2 : 5'sd0);
         end
         else
         begin
             q_out = {1'b0, q_m_r[8], q_m_r[7:0]};
-            acc_add = (N1q_m07 - N0q_m07) - (~q_m_r[8] ? 5'sd2 : 5'sd0);
+            acc_add = diff07 - (~q_m_r[8] ? 5'sd2 : 5'sd0);
         end
     end
 end
