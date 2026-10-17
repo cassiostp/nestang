@@ -80,14 +80,14 @@ PLL PLL_inst (
 defparam PLL_inst.FCLKIN = "27";
 defparam PLL_inst.IDIV_SEL = 1;
 defparam PLL_inst.FBDIV_SEL = 1;
-defparam PLL_inst.ODIV0_SEL = 4;
+defparam PLL_inst.ODIV0_SEL = 4;    // BFI 480p120: 27 MHz x 40 / 4 = 270 MHz (x5 clock, VCO 1080 MHz in range)
 defparam PLL_inst.ODIV1_SEL = 8;
 defparam PLL_inst.ODIV2_SEL = 8;
 defparam PLL_inst.ODIV3_SEL = 8;
 defparam PLL_inst.ODIV4_SEL = 8;
 defparam PLL_inst.ODIV5_SEL = 8;
 defparam PLL_inst.ODIV6_SEL = 8;
-defparam PLL_inst.MDIV_SEL = 55;
+defparam PLL_inst.MDIV_SEL = 40;
 defparam PLL_inst.MDIV_FRAC_SEL = 0;
 defparam PLL_inst.ODIV0_FRAC_SEL = 0;
 defparam PLL_inst.CLKOUT0_EN = "TRUE";

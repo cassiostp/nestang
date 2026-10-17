@@ -6,7 +6,7 @@ create_clock -name fclk -period 15.50 [get_nets {fclk}]          // 64.5161 Mhz 
 create_generated_clock -name clk -source [get_nets {fclk}] -divide_by 3 [get_nets {clk}] // 21.5054 Mhz (138K)
 
 // HDMI clocks
-create_clock -name hclk5 -period 2.6936 [get_nets {hclk5}]       // 371.25 Mhz
+create_clock -name hclk5 -period 3.7037 [get_nets {hclk5}]       // 270 Mhz (BFI 480p120)
 
 // NES/iosys to SDRAM, 3 fclk cycles
 set_multicycle_path 3 -end -setup -from [get_clocks {clk}] -to [get_clocks {fclk}]
