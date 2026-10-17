@@ -115,11 +115,13 @@ module video_fx (
         reg [7:0] s3;
         wire signed [7:0] centred = s1 ^ 8'h80;             // c - 128
         wire signed [4:0] fac = {1'b0, c_fac};
-        wire signed [13:0] scaled = ($signed(p2) + 14'sd4) >>> 3;
+        // clamp(((p2 + 4) >>> 3) + 128) as one add: the same value, one
+        // adder fewer between the DSP output and s3
+        wire signed [13:0] sum3 = $signed({{1{p2[12]}}, p2}) + 14'sd1028;
         always @(posedge clk) begin
             s1 <= clamp8($signed({6'd0, rgb_in[8*k +: 8]}) + b_off);
             p2 <= centred * fac;
-            s3 <= clamp8(scaled + 14'sd128);
+            s3 <= sum3[13] ? 8'd0 : (sum3 >= 14'sd2048) ? 8'd255 : sum3[10:3];
         end
         assign c3[8*k +: 8] = s3;
     end endgenerate
@@ -153,11 +155,13 @@ module video_fx (
         reg signed [11:0] p7;
         reg [7:0] s8;
         wire signed [3:0] fac = {1'b0, s_fac_r};
-        wire signed [13:0] scaled = ($signed(p7) + 14'sd2) >>> 2;
+        // clamp(y7 + ((p7 + 2) >>> 2)) as one add (4*y7 + p7 + 2, then
+        // the shift is wiring): the same value, one adder fewer
+        wire signed [13:0] sum8 = $signed({4'd0, y7, 2'b00}) + $signed({{2{p7[11]}}, p7}) + 14'sd2;
         always @(posedge clk) begin
             diff_r <= $signed({1'b0, c5[8*k +: 8]}) - $signed({1'b0, ysum_r[15:8]});
             p7 <= diff_r * fac;
-            s8 <= clamp8($signed({6'd0, y7}) + scaled);
+            s8 <= sum8[13] ? 8'd0 : (sum8 >= 14'sd1024) ? 8'd255 : sum8[9:2];
         end
         assign c8[8*k +: 8] = s8;
     end endgenerate
