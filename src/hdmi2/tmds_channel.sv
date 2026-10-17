@@ -17,20 +17,20 @@ module tmds_channel
 );
 
 // See Section 5.4.4.1
-// Below is a direct implementation of Figure 5-7, using the same variable names, in two
-// register stages (the code comes out one clock later, on all three channels alike):
-//   stage 1: the XOR / XNOR coded byte q_m and its number of ones, and the mode and control
-//            inputs, registered;
-//   stage 2: the running disparity acc, the choice of the inversion and the output register,
+// Below is a direct implementation of Figure 5-7, using the same variable names, in three
+// register stages (the code comes out two clocks later, on all three channels alike):
+//   stage 1: the XOR / XNOR coded byte q_m, and the mode and control inputs, registered;
+//   stage 2: q_m's number of ones, registered with q_m and the inputs;
+//   stage 3: the running disparity acc, the choice of the inversion and the output register,
 //            from the registered values.
 // In one stage the path from video_data through q_m and the count of ones to acc was the
-// critical path of the whole design.
+// critical path of the whole design; at a 148.5 MHz pixel clock (720p120) the q_m chain
+// plus its count of ones no longer fits one stage either, so the count has its own.
 
 logic signed [4:0] acc = 5'sd0;
 
 logic [8:0] q_m;
 logic [3:0] N1D;
-logic [3:0] N1q_m;
 integer i;
 
 always_comb
@@ -50,10 +50,26 @@ begin
             q_m[i + 1] = q_m[i] ^ video_data[i + 1];
         q_m[8] = 1'b1;
     end
-    N1q_m = q_m[0] + q_m[1] + q_m[2] + q_m[3] + q_m[4] + q_m[5] + q_m[6] + q_m[7];
 end
 
 // stage 1 (the values of the power-up video_data = 0, mode = 1 and control_data = 0)
+logic [8:0] q_m_1 = 9'b100000000;
+logic [2:0] mode_1 = 3'd1;
+logic [1:0] control_data_1 = 2'd0;
+logic [3:0] data_island_data_1 = 4'd0;
+always_ff @(posedge clk_pixel)
+begin
+    q_m_1 <= q_m;
+    mode_1 <= mode;
+    control_data_1 <= control_data;
+    data_island_data_1 <= data_island_data;
+end
+
+// stage 2: the count of ones in the registered q_m (same power-up values)
+logic [3:0] N1q_m;
+always_comb
+    N1q_m = q_m_1[0] + q_m_1[1] + q_m_1[2] + q_m_1[3] + q_m_1[4] + q_m_1[5] + q_m_1[6] + q_m_1[7];
+
 logic [8:0] q_m_r = 9'b100000000;
 logic signed [4:0] N1q_m07 = 5'sd0;
 logic signed [4:0] N0q_m07 = 5'sd8;
@@ -62,15 +78,15 @@ logic [1:0] control_data_r = 2'd0;
 logic [3:0] data_island_data_r = 4'd0;
 always_ff @(posedge clk_pixel)
 begin
-    q_m_r <= q_m;
+    q_m_r <= q_m_1;
     N1q_m07 <= {1'b0, N1q_m};
     N0q_m07 <= 5'sd8 - {1'b0, N1q_m};
-    mode_r <= mode;
-    control_data_r <= control_data;
-    data_island_data_r <= data_island_data;
+    mode_r <= mode_1;
+    control_data_r <= control_data_1;
+    data_island_data_r <= data_island_data_1;
 end
 
-// stage 2
+// stage 3
 logic [9:0] q_out;
 logic [9:0] video_coding;
 assign video_coding = q_out;

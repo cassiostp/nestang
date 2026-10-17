@@ -1,7 +1,7 @@
-// tmds_channel in two register stages against the direct implementation (the module as it was
+// tmds_channel in three register stages against the direct implementation (the module as it was
 // before the split, built from git history by run.sh as tmds_channel_old). Both channels of
 // each of the three TMDS channels get the same inputs on every clock, and the new code words
-// must be the old ones one clock later.
+// must be the old ones two clocks later.
 // The inputs follow the hdmi module's sequences: control periods (sync pulses, video and data
 // island preambles), video guard band, a video period of pseudo-random pixels (up to a whole
 // 1280 pixel line, so the running disparity wanders), data island guard bands and data islands of
@@ -35,7 +35,7 @@ module tb_tmds_channel;
 
     // the periods: 0 control, 1 video, 2 video guard, 3 island, 4 island guard; mode 5 is the
     // control period with the video preamble in front of the guard band
-    reg [9:0] od0, od1, od2;
+    reg [9:0] od0, od1, od2, od0b, od1b, od2b;
     integer clocks = 0, bad = 0, cnt[0:4], k, run, seg, pk;
     integer nmode0 = 0, nmode1 = 0, nmode2 = 0, nmode3 = 0, nmode4 = 0, nacc_neg = 0, nacc_pos = 0;
     reg [31:0] h = 32'h2468ACE;
@@ -58,15 +58,15 @@ module tb_tmds_channel;
         end
     endtask
 
-    // compare on every edge: the new outputs against the old ones one edge earlier
+    // compare on every edge: the new outputs against the old ones two edges earlier
     always @(posedge clk_pixel) begin
         clocks <= clocks + 1;
-        if (clocks > 4) begin
-            if (new0 !== od0 || new1 !== od1 || new2 !== od2) begin
+        if (clocks > 5) begin
+            if (new0 !== od0b || new1 !== od1b || new2 !== od2b) begin
                 bad <= bad + 1;
                 if (bad < 8)
-                    $display("MISMATCH at clock %0d mode=%0d: new %h %h %h, old one clock earlier %h %h %h", clocks, mode,
-                             new0, new1, new2, od0, od1, od2);
+                    $display("MISMATCH at clock %0d mode=%0d: new %h %h %h, old two clocks earlier %h %h %h", clocks, mode,
+                             new0, new1, new2, od0b, od1b, od2b);
             end
         end
         case (mode)
@@ -79,6 +79,7 @@ module tb_tmds_channel;
         if (o1.acc < 0) nacc_neg <= nacc_neg + 1;
         if (o1.acc > 0) nacc_pos <= nacc_pos + 1;
         od0 <= old0; od1 <= old1; od2 <= old2;
+        od0b <= od0; od1b <= od1; od2b <= od2;
     end
 
     reg [1:0] sync;

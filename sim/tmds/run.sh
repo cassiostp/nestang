@@ -1,5 +1,5 @@
 #!/bin/sh
-# tmds_channel (src/hdmi2) in two register stages against the module as it was before the
+# tmds_channel (src/hdmi2) in three register stages against the module as it was before the
 # split, built from git history ($BASE, the last commit before the split) as tmds_channel_old
 # (needs git; without it run the git/sed lines on the host first). From this directory:  ./run.sh
 set -e
