@@ -178,6 +178,21 @@ initial begin
     poll;
     expect_id_reply(400000, "T4b poll after spliced printf burst");
 
+    // T5: 0x17 (link resync) while idle, then a poll. The command is not
+    // a poll and must not stop the next core-ID reply.
+    send_hdr(16'd1, 8'h17);
+    poll;
+    expect_id_reply(200000, "T5 poll after 0x17");
+
+    // T5b: a long frame, a gap so RX returns to idle, then 0x17, then a
+    // poll. 0x17 sent with no gap would be swallowed as a parameter.
+    tx_byte(8'hAA); tx_byte(8'h01); tx_byte(8'h03); tx_byte(8'h04);
+    tx_byte(8'h02); tx_byte(8'h05);
+    #2_000_000;
+    send_hdr(16'd1, 8'h17);
+    poll;
+    expect_id_reply(400000, "T5b poll after gap and 0x17");
+
     if (errs == 0)
         $display("tb_rx_desync: PASS");
     else

@@ -42,7 +42,7 @@ Halt at NES scanline 240 (`HALT_LINE`), release at HDMI row 647 (`RELEASE_ROW`) 
 ## Firmware link
 
 - Core ID 1 (`CORE_ID(1)` in `src/nestang_top.sv`; `core/cores.cpp` in firmware maps 1 to `nestang.bin`).
-- Save channel `SAVE_IF=1, SAVE_AW=13, SAVE_SYNC=0`: 8 KB WRAM through SDRAM port 3 (`sv_req`/`sv_ack`, dirty flag `save_written`); UART commands `0x11` restore / `0x12` dump / `0x0A` block / `0x0B` dirty.
+- Save channel `SAVE_IF=1, SAVE_AW=13, SAVE_SYNC=0`: 8 KB WRAM through SDRAM port 3 (`sv_req`/`sv_ack`, dirty flag `save_written`); UART commands `0x11` restore / `0x12` dump / `0x0A` block / `0x0B` dirty / `0x17` link resync (drops TX state).
 - `core_config` bits used: `[17]` menu pause, `[16]` scanlines, `[19:18]` darkness, `[20]` thick, `[21]` output rows; `video_config` drives `src/video_fx.v`.
 - `iosys_bl616.v` is one of six divergent copies (`cassiostp/tangcore#30`): a fix to one usually belongs in the others.
 

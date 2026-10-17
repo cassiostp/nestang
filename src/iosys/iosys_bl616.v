@@ -340,6 +340,12 @@ end
 // 0x11 blk[15:0] <512 bytes> write one block into save RAM (SAVE_IF only)
 // 0x12 blk[15:0]             request one save-RAM block (SAVE_IF only)
 // 0x13 x[31:0]               set video config (video_fx.v)
+// 0x17                       link resync: drop TX state and ack anything
+//                            TX owed. The firmware sends this after 2 ms of
+//                            silence, so RX is already back in RECV_IDLE
+//                            (RX_GAP_MAX) and 0x17 is not swallowed as a
+//                            parameter. len is 1; a longer frame is consumed
+//                            with no other side effect.
 //
 // Response payloads from FPGA to BL616:
 // 0x01 core_id[7:0]          core ID
@@ -374,7 +380,9 @@ always @(posedge clk) begin
         sv_din_rx <= 0;
         sv_req_blk <= 0;
         sv_rd_req <= 0;
+        link_resync <= 0;
     end else begin
+        link_resync <= 0;
         rom_do_valid <= 0;
         we <= 0;
         mgmt_write <= 0;
@@ -413,6 +421,8 @@ always @(posedge clk) begin
 
             RECV_CMD: if (rx_valid) begin
                 cmd_reg <= rx_data;
+                if (rx_data == 8'h17)
+                    link_resync <= 1;               // TX drops its frame next cycle
                 if (rx_data == 1 || rx_data == 2) 
                     recv_state <= RECV_RESPONSE_REQ;    // request sending core id / config string
                 else if (len_reg > 1)
@@ -578,6 +588,8 @@ reg [15:0] resp_frame_len;
 // wedged. Drop back to idle, acknowledge whatever TX owed, and let the
 // firmware's gap resync + next poll carry on.
 reg [17:0] tx_wdog = 0;
+// One-cycle pulse from RX when command 0x17 is accepted. TX only reads it.
+reg link_resync = 0;
 
 // UART TX: command responses, joystick updates and FDD requests
 always @(posedge clk) begin
@@ -833,6 +845,21 @@ always @(posedge clk) begin
 
             default: send_state <= SEND_IDLE;       // no state may park TX
         endcase
+
+        // 0x17: abandon whatever TX was sending and ack the handshakes so
+        // the next poll is answered. A cut save frame is not padded -- the
+        // firmware drops its parser at the same time, and padding zeros
+        // would commit a half-block as a good save.
+        if (link_resync) begin
+            send_state <= SEND_IDLE;
+            response_ack <= response_req;
+            if (SAVE_IF) begin
+                sv_rd_ack <= sv_rd_req;
+                if (!SAVE_SYNC)
+                    sv_abort_stb <= 1;
+            end
+            tx_wdog <= 0;
+        end
     end
 end
 
