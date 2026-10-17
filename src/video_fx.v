@@ -13,7 +13,7 @@
 //   [17:16] grid strength: the grid pixels lose 1/8, 1/4, 3/8, 1/2
 //   [19:18] smoothing (smooth.v; not used here)
 //   [31:20] reserved
-// All zero = no change: the output is then bit-identical to the input, FX_LAT (11)
+// All zero = no change: the output is then bit-identical to the input, FX_LAT (12)
 // clocks later. So is any word with brightness, contrast, saturation, gamma, mask
 // type and grid all 0, whatever the strengths say.
 //
@@ -64,7 +64,7 @@ module video_fx (
     output [23:0] rgb_out           // FX_LAT clocks after rgb_in
 );
 
-    localparam FX_LAT = 11;         // 8 colour stages, sl_dim, grid/mask, output register
+    localparam FX_LAT = 12;         // 8 colour stages, gamma register, sl_dim, grid/mask, output register
 
     // settings: synchronised to the pixel clock, latched at the start of every frame
     reg [17:0] cfg_a, cfg_b;
@@ -88,15 +88,15 @@ module video_fx (
 
     // The flags that go with the pixel, delayed like it: *_d[n] is n clocks old.
     // The colour stages use the neutral setting for a pixel that is not the picture.
-    reg [8:1] pic_r, dark_r, grid_r;
+    reg [9:1] pic_r, dark_r, grid_r;
     always @(posedge clk) begin
-        pic_r  <= {pic_r[7:1],  pic_in};
-        dark_r <= {dark_r[7:1], dark_in};
-        grid_r <= {grid_r[7:1], (col_last_in | row_last_in) & pic_in};
+        pic_r  <= {pic_r[8:1],  pic_in};
+        dark_r <= {dark_r[8:1], dark_in};
+        grid_r <= {grid_r[8:1], (col_last_in | row_last_in) & pic_in};
     end
-    wire [8:0] pic_d  = {pic_r, pic_in};
-    wire [8:1] dark_d = dark_r;
-    wire [8:1] grid_d = grid_r;
+    wire [9:0] pic_d  = {pic_r, pic_in};
+    wire [9:1] dark_d = dark_r;
+    wire [9:1] grid_d = grid_r;
 
     function [7:0] clamp8(input signed [13:0] v);
         clamp8 = v[13] ? 8'd0 : (v > 14'sd255) ? 8'd255 : v[7:0];
@@ -125,9 +125,13 @@ module video_fx (
     end endgenerate
 
     // 4: luma partial products  5: luma
+    // The saturation differences and factor are registered with the luma
+    // (from c4 and the unregistered ysum), so the stage-6 multipliers are
+    // fed by registers: c5/y5 -> subtract -> DSP was the 148.5 MHz path.
     reg [15:0] lr, lg, lb;
-    reg [23:0] c4, c5;
+    reg [23:0] c4;
     reg [7:0]  y5;
+    reg [2:0]  s_fac_r;
     wire [15:0] ysum = lr + lg + lb;
     always @(posedge clk) begin
         lr <= 16'd77  * c3[23:16];
@@ -135,22 +139,22 @@ module video_fx (
         lb <= 16'd29  * c3[7:0];
         c4 <= c3;
         y5 <= ysum[15:8];
-        c5 <= c4;
+        s_fac_r <= pic_d[4] ? 3'd4 + f_sat : 3'd4;
     end
 
     // 6: saturation multiply  7: saturation divide
-    wire [2:0] s_fac = pic_d[5] ? 3'd4 + f_sat : 3'd4;
     reg  [7:0] y6;
     wire [23:0] c7;
     always @(posedge clk) y6 <= y5;
     generate for (k = 0; k < 3; k = k + 1) begin : sat
+        reg signed [8:0] diff_r;
         reg signed [11:0] p6;
         reg [7:0] s7;
-        wire signed [8:0] diff = $signed({1'b0, c5[8*k +: 8]}) - $signed({1'b0, y5});
-        wire signed [3:0] fac = {1'b0, s_fac};
+        wire signed [3:0] fac = {1'b0, s_fac_r};
         wire signed [13:0] scaled = ($signed(p6) + 14'sd2) >>> 2;
         always @(posedge clk) begin
-            p6 <= diff * fac;
+            diff_r <= $signed({1'b0, c4[8*k +: 8]}) - $signed({1'b0, ysum[15:8]});
+            p6 <= diff_r * fac;
             s7 <= clamp8($signed({6'd0, y6}) + scaled);
         end
         assign c7[8*k +: 8] = s7;
@@ -163,11 +167,17 @@ module video_fx (
         fx_gamma_rom rom (.clk(clk), .addr({g_eff, c7[8*k +: 8]}), .q(rgb_c[8*k +: 8]));
     end endgenerate
 
+    // 9: a register between the gamma ROMs and sl_dim. The ROM output is
+    // slow (block RAM), and ROM -> dim subtract -> mask multiplier was the
+    // other 148.5 MHz path; the register gives sl_dim a fabric-fed stage.
+    reg [23:0] rgb_cq;
+    always @(posedge clk) rgb_cq <= rgb_c;
+
     // the scanline darkening
     wire [23:0] rgb_d;
-    sl_dim dim (.clk(clk), .rgb_in(rgb_c), .dark(dark_d[8]), .darkness(darkness), .rgb_out(rgb_d));
+    sl_dim dim (.clk(clk), .rgb_in(rgb_cq), .dark(dark_d[9]), .darkness(darkness), .rgb_out(rgb_d));
 
-    // Grid and mask factors in 1/64, registered next to the dimmed pixel (clock 9).
+    // Grid and mask factors in 1/64, registered next to the dimmed pixel (clock 10).
     // They are computed for the pixel that will be output three clocks later, x = cx + MASK_LEAD:
     // p3 = x mod 3 and trd = (x div 3) mod 2 count along cx, restarted on the first column
     // of a row (the clock after it holds x = 1 + MASK_LEAD).
@@ -190,23 +200,23 @@ module video_fx (
     wire [1:0] phase    = (f_mask == 2'd3 && cy[0]) ? (p3 == 2'd2 ? 2'd0 : p3 + 2'd1) : p3;
     wire       slot_row = (f_mask == 2'd2) && (cy[1:0] == (trd ? 2'd2 : 2'd0));
     wire [3:0] m_fac    = 4'd6 - {2'b00, f_mask_str};       // 8 - (2 + strength)
-    wire [3:0] g_fac    = (f_grid && grid_d[8]) ? 4'd7 - {2'b00, f_grid_str} : 4'd8;  // 8 - (1 + strength)
+    wire [3:0] g_fac    = (f_grid && grid_d[9]) ? 4'd7 - {2'b00, f_grid_str} : 4'd8;  // 8 - (1 + strength)
 
     reg [6:0]  fac_r, fac_g, fac_b;
     always @(posedge clk) begin
-        fac_r <= (pic_d[8] && f_mask != 2'd0 && (phase != 2'd0 || slot_row) ? m_fac : 4'd8) * g_fac;
-        fac_g <= (pic_d[8] && f_mask != 2'd0 && (phase != 2'd1 || slot_row) ? m_fac : 4'd8) * g_fac;
-        fac_b <= (pic_d[8] && f_mask != 2'd0 && (phase != 2'd2 || slot_row) ? m_fac : 4'd8) * g_fac;
+        fac_r <= (pic_d[9] && f_mask != 2'd0 && (phase != 2'd0 || slot_row) ? m_fac : 4'd8) * g_fac;
+        fac_g <= (pic_d[9] && f_mask != 2'd0 && (phase != 2'd1 || slot_row) ? m_fac : 4'd8) * g_fac;
+        fac_b <= (pic_d[9] && f_mask != 2'd0 && (phase != 2'd2 || slot_row) ? m_fac : 4'd8) * g_fac;
     end
 
-    // 10: the multiply
+    // 11: the multiply
     reg [13:0] out_r, out_g, out_b;
     always @(posedge clk) begin
         out_r <= rgb_d[23:16] * fac_r;
         out_g <= rgb_d[15:8]  * fac_g;
         out_b <= rgb_d[7:0]   * fac_b;
     end
-    // 11: the output register. It keeps the multipliers (DSP blocks) away from
+    // 12: the output register. It keeps the multipliers (DSP blocks) away from
     // the hdmi module's TMDS encoders, which would otherwise be one path.
     reg [23:0] rgb_q;
     always @(posedge clk)

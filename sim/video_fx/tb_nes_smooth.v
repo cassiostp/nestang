@@ -10,7 +10,7 @@
 
 module tb_nes_smooth;
 
-    localparam FX_LAT = 11;
+    localparam FX_LAT = 12;
 
     reg clk_pixel = 0, clk = 0;
     always #6.734 clk_pixel = ~clk_pixel;       // 74.25 MHz
