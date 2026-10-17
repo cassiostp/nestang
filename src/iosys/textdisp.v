@@ -60,6 +60,7 @@ gowin_dpb_menu menu_mem (
 
 reg [6:0] logo_addr;
 reg [2:0] logo_xoff;
+reg [2:0] font_xoff;
 reg logo_active;
 reg [14:0] color_buf;
 reg [7:0] x_r;
@@ -82,7 +83,10 @@ always @* begin             // address and output logic
         if (logo_active)
             color = mem_do_b[logo_xoff] ? COLOR_LOGO : COLOR_BACK;
         else
-            color = mem_do_b[x[2:0]] ? (is_cursor ? COLOR_CURSOR : COLOR_TEXT) : COLOR_BACK;
+            // Use the latched bit offset from the fetch, not the live x:
+            // at 480p each overlay pixel holds for only 2 HDMI clocks, so x
+            // has already advanced by the time its font byte arrives.
+            color = mem_do_b[font_xoff] ? (is_cursor ? COLOR_CURSOR : COLOR_TEXT) : COLOR_BACK;
     end
     default: mem_addr_b = 0;
     endcase
@@ -110,6 +114,7 @@ always @(posedge hclk) begin    // actual state machine
         logo_y = y - LOGO_Y;
         logo_addr <= {logo_y, 3'b0} + logo_y + logo_x[6:3];
         logo_xoff <= logo_x[2:0];
+        font_xoff <= x[2:0];
         is_cursor <= x[7:3] == 0;
     end
 

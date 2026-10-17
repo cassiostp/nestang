@@ -149,8 +149,8 @@ end
 // half the HDMI rate, 0.086 % fast, with a fixed phase.
 //
 // Phase: the NES waits at the first vblank scanline (240, all of lines 0-239
-// are written by then) and runs again when HDMI reaches RELEASE_ROW in a
-// lit frame. The reader is faster per line than the writer, so the release
+// are written by then) and runs again when HDMI reaches RELEASE_ROW in an
+// even frame. The reader is faster per line than the writer, so the release
 // row has to leave the writer most of the inserted frame plus the rest of
 // the lit frame to stay ahead of the next lit read, while the inserted
 // read (of the frame just lit) runs ahead of the writer overwriting it.
@@ -159,25 +159,52 @@ end
 // exact after at most two game frames, including after reset, game reload
 // and menu pause.
 //
+// LCD image retention: BFI at half the refresh rate always shows the image
+// on frames of the same LCD polarity, leaving a DC bias. Every
+// BFI_SWAP_FRAMES game frames (~30 s) the lit/inserted assignment flips,
+// so the image averages to zero DC over minutes. The flip is armed at a
+// release and takes effect at the next frame start, so one boundary shows
+// two lits or two blacks in a row (alternating); the release cadence never
+// moves, so there is no tear and no audio gap, just one 8 ms duplicate per
+// swap. The menu overlay is exempt from darkening, so the menu itself stays
+// steady while the game behind it keeps alternating.
+//
 localparam HALT_LINE = 240;       // NES scanline at which to wait
-localparam RELEASE_ROW = 453;     // HDMI row whose start releases the NES (lit frames only)
+localparam RELEASE_ROW = 453;     // HDMI row whose start releases the NES (even frames)
+localparam int BFI_SWAP_FRAMES = 1800;  // game frames between lit/inserted swaps (~30 s)
 
-// HDMI frames alternate lit (bfi_ins = 0) and inserted (bfi_ins = 1)
+// HDMI frame parity (toggles every frame) and the BFI phase: the inserted
+// (darkened) frame is bfi_ins ^ bfi_phase, while releases stay on even
+// frames so the game timing never shifts at a swap.
 reg bfi_ins = 1'b1;
+reg bfi_phase = 1'b0;
+reg [15:0] bfi_swap_cnt = 16'd0;
+reg bfi_swap_pending = 1'b0;
 reg at_f0_q = 1'b0;
 always @(posedge clk_pixel) begin
     at_f0_q <= (cy == 10'd0);
-    if ((cy == 10'd0) && !at_f0_q)
+    if ((cy == 10'd0) && !at_f0_q) begin
         bfi_ins <= ~bfi_ins;
+        if (bfi_swap_pending) begin
+            bfi_phase <= ~bfi_phase;
+            bfi_swap_pending <= 1'b0;
+        end
+    end
 end
 
-// HDMI side: one toggle per game frame as cy passes RELEASE_ROW in a lit frame
+// HDMI side: one toggle per game frame as cy passes RELEASE_ROW in an even frame
 reg at_rel_q = 1'b0;
 reg rel_tgl = 1'b0;
 always @(posedge clk_pixel) begin
     at_rel_q <= (cy == RELEASE_ROW);
-    if ((cy == RELEASE_ROW) && !at_rel_q && !bfi_ins)
+    if ((cy == RELEASE_ROW) && !at_rel_q && !bfi_ins) begin
         rel_tgl <= ~rel_tgl;
+        if (bfi_swap_cnt == BFI_SWAP_FRAMES - 1) begin
+            bfi_swap_cnt <= 16'd0;
+            bfi_swap_pending <= 1'b1;
+        end else
+            bfi_swap_cnt <= bfi_swap_cnt + 16'd1;
+    end
 end
 
 // NES side: synchronise the toggle, then wait/release
@@ -406,7 +433,8 @@ smooth sm (
 // calc rgb value to hdmi. In an inserted BFI frame the whole picture area
 // (border included) is black or dimmed; the menu overlay is exempt so the
 // menu stays steady while the game is paused under it.
-wire bfi_dark = bfi_ins & (bfi_mode != 2'd0) & ~overlay;
+wire bfi_eff_ins = bfi_ins ^ bfi_phase;
+wire bfi_dark = bfi_eff_ins & (bfi_mode != 2'd0) & ~overlay;
 reg [23:0] rgb_norm;
 always @* begin
     if (active_d & sl_show) begin
