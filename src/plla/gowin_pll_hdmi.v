@@ -60,7 +60,7 @@ defparam PLLA_inst.FCLKIN = "27";
 defparam PLLA_inst.IDIV_SEL = 1;
 defparam PLLA_inst.FBDIV_SEL = 1;
 defparam PLLA_inst.CLKFB_SEL = "INTERNAL";
-defparam PLLA_inst.ODIV0_SEL = 2;    // BFI: 27 MHz x 55 / 2 = 742.5 MHz (720p120 x5 clock)
+defparam PLLA_inst.ODIV0_SEL = 1;    // BFI: 27 MHz x 27.5 / 1 = 742.5 MHz (720p120 x5 clock), VCO 742.5 MHz in the 650-1300 MHz spec
 defparam PLLA_inst.ODIV0_FRAC_SEL = 0;
 defparam PLLA_inst.ODIV1_SEL = 8;
 defparam PLLA_inst.ODIV2_SEL = 8;
@@ -68,8 +68,8 @@ defparam PLLA_inst.ODIV3_SEL = 8;
 defparam PLLA_inst.ODIV4_SEL = 8;
 defparam PLLA_inst.ODIV5_SEL = 8;
 defparam PLLA_inst.ODIV6_SEL = 8;
-defparam PLLA_inst.MDIV_SEL = 55;
-defparam PLLA_inst.MDIV_FRAC_SEL = 0;
+defparam PLLA_inst.MDIV_SEL = 27;
+defparam PLLA_inst.MDIV_FRAC_SEL = 4;   // MDIV 27 + 4/8 = 27.5
 defparam PLLA_inst.CLKOUT0_EN = "TRUE";
 defparam PLLA_inst.CLKOUT1_EN = "FALSE";
 defparam PLLA_inst.CLKOUT2_EN = "FALSE";
