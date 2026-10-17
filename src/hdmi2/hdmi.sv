@@ -320,8 +320,13 @@ generate
         // See Section 5.2.3.4
         logic [23:0] header;
         logic [55:0] sub [3:0];
-        logic video_field_end;
-        assign video_field_end = cx == screen_width - 1'b1 && cy == screen_height - 1'b1;
+        // Registered like packet_enable, from next cycle's cx/cy: the
+        // combinational decode lands on the picker's enable pins too.
+        logic [BIT_HEIGHT-1:0] cy_next;
+        assign cy_next = cx == frame_width-1'b1 ? (cy == frame_height-1'b1 ? BIT_HEIGHT'(0) : cy + 1'b1) : cy;
+        logic video_field_end = 1'b0;
+        always_ff @(posedge clk_pixel)
+            video_field_end <= reset ? 1'b0 : (cx_next == screen_width - 1'b1 && cy_next == screen_height - 1'b1);
         logic [4:0] packet_pixel_counter;
         packet_picker #(
             .VIDEO_ID_CODE(VIDEO_ID_CODE),
