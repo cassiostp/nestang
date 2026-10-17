@@ -4,5 +4,3 @@ nes_fx.log
 background.txt
 build/
 __pycache__/
-nes_smooth.log
-nes_src.hex

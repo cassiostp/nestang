@@ -61,7 +61,7 @@ module tb_scanlines;
         begin
             d = thick ? dark_thick : dark_thin;
             exp_show = 1; exp_dark = 0; exp_last = 0; line_ex = -1;
-            exp_geom = (on && !out || grid) && !hid;            // the integer scale
+            exp_geom = (!out || grid) && !hid;            // the integer scale
             if (exp_geom) begin
                 k = cy - top;
                 if (k < 0 || k >= rows * lines) exp_show = 0;

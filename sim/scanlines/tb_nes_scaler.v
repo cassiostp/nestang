@@ -96,7 +96,7 @@ module tb_nes_scaler;
 
     task check_rows(input on, input out, input thick, input [1:0] dk, input over);
         begin
-            is_geom = on & ~out & ~over;
+            is_geom = ~out & ~over;
             nd = thick ? 2 : 1;
             XP = 640;
             for (row = 0; row < 720; row = row + 1) begin
@@ -110,7 +110,7 @@ module tb_nes_scaler;
                         line = (row - TOP) / R;
                         rr = (row - TOP) % R;
                         want = dut.NES_PALETTE[pal_idx(line + 8)];
-                        if (rr >= R - nd) want = darken(want, dk);
+                        if (on && rr >= R - nd) want = darken(want, dk);
                     end
                 end else begin
                     line = row * LINES / 720;       // the fractional scaler
@@ -186,7 +186,9 @@ module tb_nes_scaler;
         #1;
         // by row: the vertical geometry and the darkening
         load_image(0);
-        run(0, 0, 0, 2, 0);                     // off: the old geometry
+        run(0, 0, 0, 2, 0);                     // off, integer scale: no darkening
+        run(0, 0, 1, 0, 0);                     // off, integer scale, thick: still none
+        run(0, 1, 0, 2, 0);                     // off, full scale
         run(1, 0, 0, 2, 0);                     // the default: integer, thin, 75 %
         run(1, 0, 1, 0, 0);
         run(1, 0, 0, 1, 0);
@@ -198,12 +200,14 @@ module tb_nes_scaler;
         run(1, 0, 1, 2, 0);                     // and back
         // by column: the horizontal geometry
         load_image(1);
-        sl_on = 0; sl_out = 0; ov = 0; settle; check_columns(0);
-        $display("nes2hdmi columns, scanlines off: ok");
+        sl_on = 0; sl_out = 0; ov = 0; settle; check_columns(1);
+        $display("nes2hdmi columns, scanlines off, integer scale: ok");
         sl_on = 1; settle; check_columns(1);
         $display("nes2hdmi columns, integer scale: ok");
         sl_out = 1; settle; check_columns(0);
         $display("nes2hdmi columns, output rows: ok");
+        sl_on = 0; settle; check_columns(0);
+        $display("nes2hdmi columns, scanlines off, full scale: ok");
         $display("tb_nes_scaler: PASS");
         $finish;
     end

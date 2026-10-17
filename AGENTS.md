@@ -7,7 +7,7 @@ NES for the Tang Console 138K/60K. Port of `nand2mario/nestang` (cycle-accurate 
 ## Layout
 
 - Top: `src/nestang_top.sv` (`module nestang_top`), machine `src/nes.v`, PPU `src/ppu.v`, cart `src/cart.sv`, mappers `src/mappers/*.sv`, APU `src/apu.v`.
-- Video: scaler `src/nes2hdmi.sv` (720p framebuffer + frame lock) into `src/hdmi2/` (`hdmi.sv`, `serializer.sv`, `tmds_channel.sv`, packet/audio helpers); helpers `src/scanlines.v`, `src/video_fx.v`, `src/smooth.v`.
+- Video: scaler `src/nes2hdmi.sv` (720p framebuffer + frame lock) into `src/hdmi2/` (`hdmi.sv`, `serializer.sv`, `tmds_channel.sv`, packet/audio helpers); helpers `src/scanlines.v`, `src/video_fx.v`.
 - Memory: `src/sdram_nes.v` (dual-channel CL2 SDRAM, `FREQ 64_800_000`); board wrappers `src/boards/*.v` set `configPackage` (16-bit, ROW 13, COL 9).
 - iosys: `src/iosys/iosys_bl616.v` is the build's copy (plus `gowin_dpb_menu.v`, `textdisp.v`, `uart_fixed.v`). `src/iosys/iosys_picorv32.v` exists but is not in `build.tcl`.
 - PLLs: `src/pll/` for GW5AST-138 (`gowin_pll_27/33/hdmi/nes`, `pll_12.v`), `src/plla/` for GW5A-25/60K, `src/pllr/` (`rPLL`) for nano20k.
@@ -43,7 +43,7 @@ Halt at NES scanline 240 (`HALT_LINE`), release at HDMI row 647 (`RELEASE_ROW`) 
 
 - Core ID 1 (`CORE_ID(1)` in `src/nestang_top.sv`; `core/cores.cpp` in firmware maps 1 to `nestang.bin`).
 - Save channel `SAVE_IF=1, SAVE_AW=13, SAVE_SYNC=0`: 8 KB WRAM through SDRAM port 3 (`sv_req`/`sv_ack`, dirty flag `save_written`); UART commands `0x11` restore / `0x12` dump / `0x0A` block / `0x0B` dirty / `0x17` link resync (drops TX state).
-- `core_config` bits used: `[17]` menu pause, `[16]` scanlines, `[19:18]` darkness, `[20]` thick, `[21]` output rows; `video_config` drives `src/video_fx.v`.
+- `core_config` bits used: `[17]` menu pause, `[16]` scanlines, `[19:18]` darkness, `[20]` thick, `[21]` scale (0 integer, 1 full); `video_config` drives `src/video_fx.v`.
 - `iosys_bl616.v` is one of six divergent copies (`cassiostp/tangcore#30`): a fix to one usually belongs in the others.
 
 ## Simulations (`sim/*/README.md` says how to run; iverilog in `tangcore-iv:1`)
@@ -56,7 +56,7 @@ Halt at NES scanline 240 (`HALT_LINE`), release at HDMI row 647 (`RELEASE_ROW`) 
 - `scanlines`: `scanlines.v` row/darkening plus whole-frame scaler-vs-model checks.
 - `tmds`: 2-stage `tmds_channel` vs the pre-split version over 2.5M clocks.
 - `usb`: `usb_hid_host.v` against a behavioural low-speed device (plug/sleepy/stall/drop/kbd/mouse/unplug).
-- `video_fx`: `0x13` handling, `video_fx` vs `model.py`, regress-vs-git-history with filters off, FX and smoothing inside `nes2hdmi`.
+- `video_fx`: `0x13` handling, `video_fx` vs `model.py`, regress-vs-git-history with filters off, FX inside `nes2hdmi`.
 
 ## Traps
 
