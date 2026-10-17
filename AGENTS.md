@@ -28,6 +28,13 @@ gh workflow run cores.yml -R cassiostp/tangcore --ref ci/core-builds -f core=nes
 
 The artifact is `nestang-<board>/nestang.bin` plus timing/utilisation reports; the build fails on any setup/hold violation.
 
+Build variants: `TANGCORE_VARIANT` unset/empty/`standard` is the normal 720p
+build; `TANGCORE_VARIANT=hz120` (console138k only, anything else is an error)
+builds the 480p 120 Hz bitstream instead (shipped as `nestang_120hz.bin`).
+The variant is printed as `TangCore variant:` in the build log; the RTL
+difference is gated on `` `ifdef HZ120 `` (see `src/variant/`). CI:
+`-f variant=hz120` (refuses if `build.tcl` has no variant support).
+
 ## Clocks and constraints
 
 - One SDC serves every GW5 board: `src/nestang.sdc` constrains at the faster 138K PLL rates (`sys_clk` 50 MHz, `fclk` 64.5161 MHz, `clk = fclk/3` 21.5054 MHz, `hclk5` 371.25 MHz). The 60K/25K PLLs run 0.07% slower, inside the margin. `src/boards/nano20k.sdc` is nano-only.
@@ -51,12 +58,14 @@ Halt at NES scanline 240 (`HALT_LINE`), release at HDMI row 647 (`RELEASE_ROW`) 
 - `audio`: mixer silence/DC and `FFFF -> halved` sign handling.
 - `cosim`: Verilator model of the real `iosys_bl616`+`sdram_nes` for firmware co-sim, no game/video/audio.
 - `framelock`: real `nes2hdmi` vs a cycle-exact clock model over 600+ frames at both console clocks.
+  `sim/framelock/run.sh [standard|hz120|both]`: the hz120 run is 138k-only at 2x the rate with per-BFI-mode pixel checks.
 - `mappers`: VRC24/VRC6/MMC5 banking, audio and multiplier.
 - `saveram`: real iosys+sdram+MCU model: restore/dump, `0x0B` dirty, RX-desync and link-soak cases.
 - `scanlines`: `scanlines.v` row/darkening plus whole-frame scaler-vs-model checks.
+  `sim/scanlines/run.sh [standard|hz120|both]`; the hz120 run also dumps `frames/hz120_*.ppm` (Integer/Full, scanlines on/off, OSD band).
 - `tmds`: 2-stage `tmds_channel` vs the pre-split version over 2.5M clocks.
 - `usb`: `usb_hid_host.v` against a behavioural low-speed device (plug/sleepy/stall/drop/kbd/mouse/unplug).
-- `video_fx`: `0x13` handling, `video_fx` vs `model.py`, regress-vs-git-history with filters off, FX inside `nes2hdmi`.
+- `video_fx`: `0x13` handling, `video_fx` vs `model.py`, regress-vs-git-history with filters off, FX inside `nes2hdmi` (standard variant only; the 720p baselines predate 480p).
 
 ## Traps
 

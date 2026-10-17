@@ -265,10 +265,14 @@ module tb_nes_scaler;
         begin
             sl_on = on; sl_out = out; sl_thick = thick; sl_dark = dk; ov = 0; bfi_mode_tb = 2'd1;
             settle;
+            // start an inserted frame (bfi_ins sampled at cy 0, past the
+            // frame-start updates): raise the OSD for rows 100..300 of it
             begin : find_ins
                 forever begin
                     while (dut.cy != 10'd0) @(posedge clk_pixel);
+                    #1;     // let the cy-0 updates (bfi_ins) apply
                     if (dut.bfi_ins === 1'b1) disable find_ins;
+                    while (dut.cy == 10'd0) @(posedge clk_pixel);
                 end
             end
             while (dut.cy != 10'd100) @(posedge clk_pixel);
@@ -279,9 +283,15 @@ module tb_nes_scaler;
             while (dut.cy == SETTLE_CY) @(posedge clk_pixel);
             for (r = 0; r < ROWS; r = r + 1) begin
                 got = img[r * COLS + XP];
-                if (r >= 110 && r <= 290) want = overlay_rgb(overlay_color);
-                else want = 24'h000000;
-                if (got !== want) fail("osd band", r, got, want);
+                // the OSD covers rows 100..299; rows 96..104 and 296..304
+                // are the toggle transitions, left unchecked
+                if (r >= 105 && r <= 295) begin
+                    want = overlay_rgb(overlay_color);
+                    if (got !== want) fail("osd band", r, got, want);
+                end else if (r <= 95 || r >= 305) begin
+                    want = 24'h000000;
+                    if (got !== want) fail("osd band", r, got, want);
+                end
             end
             dump_frame(name);
             $display("nes2hdmi hz120 osd band on=%b out=%b: ok", on, out);
