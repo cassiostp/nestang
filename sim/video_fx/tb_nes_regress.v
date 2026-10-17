@@ -3,6 +3,8 @@
 // same rgb stream into the hdmi module, clock for clock, in every scanline mode, with the menu
 // overlay up or not. The words tried: 0, what the firmware sends with every filter off (the
 // strengths at 1), and one with the LCD grid bit set, which the NES ignores.
+// The scanlines-off cases use full scale (out = 1): with integer scale the picture no longer
+// matches the baseline, which predates the integer geometry with scanlines off.
 // The frame buffer holds a pseudo-random picture and the overlay is a pattern read through the
 // overlay_x / overlay_y outputs with a two clock latency, so a picture or overlay that lands on
 // other pixels is caught. Settings change in the blanking, then two whole frames are compared.
@@ -114,9 +116,9 @@ module tb_nes_regress;
     initial begin
         // the first frame runs the pipelines empty; the settings are applied in its blanking
         wait_row730;
-        variant(0, 0, 0, 2, 0, OFF);
-        variant(0, 0, 0, 2, 0, FW_OFF);
-        variant(0, 0, 0, 2, 0, GRID);
+        variant(0, 1, 0, 2, 0, OFF);             // off, full scale
+        variant(0, 1, 0, 2, 0, FW_OFF);
+        variant(0, 1, 0, 2, 0, GRID);
         variant(1, 0, 0, 2, 0, OFF);            // integer scale, thin
         variant(1, 0, 0, 2, 0, FW_OFF);
         variant(1, 0, 1, 0, 0, FW_OFF);         // thick, 25 %

@@ -1,9 +1,9 @@
-// nes2hdmi with smoothing against the scaler it was built from (the baseline, built from the
-// git history by prep.sh as nes2hdmi_fx): with video_config[19:18] clear (0, or the reserved 3)
-// the rgb stream into the hdmi module must be the very same, clock for clock, in every
-// scanline mode, with the other filters on or off and the menu overlay up or not; and with
-// the overlay up the same holds in every smoothing mode, the overlay is never smoothed. Both
-// get the same video_config (the baseline ignores bits 19:18).
+// nes2hdmi without smoothing against the scaler before smoothing was added (the baseline,
+// built from the git history by prep.sh as nes2hdmi_fx): with video_config[19:18] clear (0,
+// or the reserved 3, which the scaler ignores like every other unused bit) the rgb stream into
+// the hdmi module must be the very same, clock for clock, in every scanline mode, with the
+// other filters on or off and the menu overlay up or not; and with the overlay up the overlay
+// is never filtered. Both get the same video_config (the baseline ignores bits 19:18).
 // The frame buffer holds a pseudo-random picture and the overlay is a pattern read through
 // the overlay_x / overlay_y outputs with a two clock latency, so a picture or overlay that
 // lands on other pixels is caught. Settings change in the blanking, then two whole frames
@@ -113,7 +113,6 @@ module tb_smooth_regress;
     endtask
 
     localparam [31:0] OFF = 32'h0000_0000, FW_OFF = 32'h0001_2000, RSVD = 32'h000C_0000;
-    localparam [31:0] SHARP = 32'h0004_0000, SOFT = 32'h0008_0000;
     // colour, a slot mask and a grid bit the NES ignores
     localparam [31:0] FXW = 32'h0001_A000 | 3'd2 | (3'd5 << 3) | (3'd1 << 6) | (2'd1 << 9) | (2'd2 << 11) | (2'd2 << 13);
 
@@ -131,9 +130,9 @@ module tb_smooth_regress;
         variant(1, 0, 1, 3, 0, FXW | RSVD);     // 100 %
         variant(1, 1, 0, 2, 0, OFF);            // output rows
         variant(1, 1, 1, 1, 0, FXW | RSVD);
-        variant(0, 0, 0, 2, 1, SHARP);          // menu overlay up: never smoothed
-        variant(1, 0, 0, 2, 1, SOFT | FXW);
-        variant(1, 1, 1, 2, 1, SHARP | FW_OFF);
+        variant(0, 0, 0, 2, 1, OFF);              // menu overlay up: never filtered
+        variant(1, 0, 0, 2, 1, FXW);
+        variant(1, 1, 1, 2, 1, FW_OFF);
         variant(0, 0, 0, 2, 1, RSVD);
         variant(1, 0, 1, 2, 0, FW_OFF);         // and back
         $display("tb_smooth_regress: %0d pixels identical to the baseline (%0d picture)", total_cmp, total_pic);

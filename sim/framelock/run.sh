@@ -35,11 +35,11 @@ grep -q 'even_frame_toggle' build/clockgen_sim.v
 grep -q 'assign short_frame' build/clockgen_sim.v
 grep -q "vblank_end_sl   = 9'd260" $RTL/ppu.v
 cp $RTL/assets/background.txt build/background.txt
-$IV sh -c "iverilog -g2012 -o build/tb_138k.out tb_frame_lock.v $RTL/nes2hdmi.sv build/clockgen_sim.v $RTL/scanlines.v $RTL/video_fx.v $RTL/smooth.v $SCN/hdmi_stub.v"
+$IV sh -c "iverilog -g2012 -o build/tb_138k.out tb_frame_lock.v $RTL/nes2hdmi.sv build/clockgen_sim.v $RTL/scanlines.v $RTL/video_fx.v $SCN/hdmi_stub.v"
 echo "iverilog elaboration: ok"
 $VLT --cc --top-module fl_top --prefix Vfl_top -Mdir build/obj -CFLAGS "-O2" \
   -Wno-PINMISSING -Wno-IMPLICIT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL -Wno-UNDRIVEN \
-  /w/fl_top.sv $VSRC/nes2hdmi.sv $VSRC/ppu.v $VSRC/scanlines.v $VSRC/video_fx.v $VSRC/smooth.v $VSCN/hdmi_stub.v \
+  /w/fl_top.sv $VSRC/nes2hdmi.sv $VSRC/ppu.v $VSRC/scanlines.v $VSRC/video_fx.v $VSCN/hdmi_stub.v \
   --exe /w/tb_frame_lock.cpp > build/verilate.log 2>&1 || { cat build/verilate.log; exit 1; }
 if grep -E "fl_top|tb_frame_lock" build/verilate.log; then echo "new warnings in sim files:"; cat build/verilate.log; exit 1; fi
 docker run --rm --name framelock_make --user "$(id -u):$(id -g)" -v "$PWD:/w" -v "$ROOT:/r" -w /w --entrypoint make verilator/verilator:latest \
