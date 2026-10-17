@@ -9,6 +9,9 @@
 # per clock config run under Verilator (fl_top.sv + tb_frame_lock.cpp: the
 # same DUT, model and checks, engine only). Verilator 5.052 elaborates the
 # real src/ppu.v (array literals and all), so no extraction is needed there.
+# The Verilator run exercises every BFI mode (video_config[21:20]): mode 1
+# in run-in/pause/reset, mode 0 in the first 200-frame run, mode 2 in the
+# second, mode 3 (rolling) in the final 150-frame run.
 #
 # Usage (repo root): sh sim/framelock/run.sh
 # Afterwards (host): python3 sim/framelock/check_audio.py \

@@ -10,12 +10,14 @@ module fl_top (
     input por_n,            // power-on reset (DUT resetn): once only
     input reset_model,      // reset_nes equivalent (game reload pulses this)
     input pause_tb,         // core_config[17] equivalent
+    input [1:0] bfi_mode_tb,    // video_config[21:20] equivalent, set per scenario phase
     output frame_halt,
     output [8:0] scanline,
     output [8:0] nes_cycle,
     output [9:0] cy,
     output [10:0] cx,
     output bfi_ins,
+    output [9:0] roll_beam,     // mode-3 band position, advances per game frame
     output [23:0] rgb_out,
     output memA_we,
     output [15:0] memA_addr,
@@ -74,11 +76,12 @@ module fl_top (
         .short_frame(ppu_short_frame), .is_vbe_sl()
     );
 
-    // synthetic picture: each line its own palette index; synthetic audio: a
-    // full-scale 440 Hz sine stepped at the CPU rate
+    // synthetic picture: each line its own palette index (33..44: all
+    // non-black, so every lit row reads nonzero at the probe column);
+    // synthetic audio: a full-scale 440 Hz sine stepped at the CPU rate
     reg [5:0] pix_color = 0;
     always @(posedge clk)
-        pix_color <= scanline[5:0] + 6'd8;
+        pix_color <= 6'd33 + (scanline[3:0] % 12);
     reg [15:0] phase_acc = 0;
     reg [15:0] sample_tb = 0;
     always @(posedge clk)
@@ -97,7 +100,7 @@ module fl_top (
         .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(1'b0),
         .video_config(32'd0),
         .std_timing(1'b0),      // native NES rate x2, as in hardware
-        .bfi_mode(2'd1),        // black inserted frame, as in the test build
+        .bfi_mode(bfi_mode_tb),
         .overlay(1'b0), .overlay_x(overlay_x), .overlay_y(overlay_y),
         .overlay_color(15'd0),
         .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
@@ -110,6 +113,7 @@ module fl_top (
     assign cy = dut.cy;
     assign cx = dut.cx;
     assign bfi_ins = dut.bfi_ins;
+    assign roll_beam = dut.roll_beam;
     assign rgb_out = dut.rgb;
     assign memA_we = dut.mem_portA_we;
     assign memA_addr = dut.mem_portA_addr;

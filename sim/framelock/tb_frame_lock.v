@@ -91,11 +91,12 @@ module tb_frame_lock;
         .short_frame(ppu_short_frame), .is_vbe_sl()
     );
 
-    // synthetic picture: each line its own palette index; synthetic audio: a
+    // synthetic picture: each line its own palette index (33..44: all
+    // non-black, so every lit row reads nonzero); synthetic audio: a
     // full-scale 440 Hz sine stepped at the CPU rate
     reg [5:0] pix_color;
     always @(posedge clk)
-        pix_color <= ppu_scanline[5:0] + 6'd8;
+        pix_color <= 6'd33 + (ppu_scanline[3:0] % 12);
     reg [15:0] phase_acc = 0;
     reg [15:0] sample_tb = 0;
     always @(posedge clk)

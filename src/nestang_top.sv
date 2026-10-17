@@ -125,7 +125,7 @@ wire [31:0] video_config;     // from iosys
 wire pause = core_config[17]; // freeze the machine while the game menu is open
 wire frame_halt;              // from nes2hdmi: frame-lock halt, ORed with pause
 wire video_std_timing = 1'b0; // 0: native NES-rate x2 HDMI (855-pixel lines); 1: standard 120 Hz, for displays that refuse it
-wire [1:0] bfi_mode = 2'd1;   // BFI test build: black inserted frame (480p120 out); 0 would show both frames lit
+wire [1:0] bfi_mode = video_config[21:20];   // 0 off, 1 black, 2 dim, 3 rolling; firmware Video menu (0x13)
 `ifdef VERILATOR
 assign frame_halt = 1'b0; // no nes2hdmi under Verilator: no frame lock
 `endif

@@ -6,6 +6,22 @@
 // pass from a single game frame (per-line write-frame tags), lit passes
 // stepping by exactly one game frame, with the inserted pass all black.
 //
+// BFI modes (video_config[21:20]) run one per scenario phase: run-in/pause/
+// reset phases use mode 1 (black), the 200-frame run uses mode 0 (off), the
+// second 200-frame run uses mode 2 (dim), the final 150-frame run uses mode
+// 3 (rolling). Mode switches coincide with pause/reset edges, inside the
+// existing 6-frame settle window. Per-mode pixel checks at the centre
+// column (cx 641, all 480 active rows, stimulus has no black entries):
+//   mode 0: every settled frame fully lit (all rows nonzero);
+//   mode 1: lit passes nonzero, inserted passes all black;
+//   mode 2: lit passes nonzero, inserted passes the exact per-channel half
+//     of the paired lit pass (the inserted pass repeats the lit game frame);
+//   mode 3: every settled frame has exactly 240 lit rows, consecutive
+//     settled frames are complementary (each row lit in exactly one of the
+//     pair), and the band position advances 8 rows per game frame
+//     (checked against the release count).
+// The phase swap (1800 game frames) never fires inside the run.
+//
 // argv: <clk_half_ps> <pix_half_ps> <tag>  (tag prefixes log/audio files)
 // Prints tb_frame_lock: PASS on success (and returns nonzero otherwise).
 #include <cstdio>
@@ -38,6 +54,16 @@ int main(int argc, char **argv) {
     int game_wr = 0;                 // game frame currently being written
     int pass_fmin = 0, pass_fmax = -1, pass_ins = 0, last_lit = -1;
     int lit_nonzero = 0, ins_nonzero = 0, stale_in_frame = 0;
+    // centre-column row values for the current HDMI frame (cy 0..479)
+    static const int ROWS = 480, PROBE_CX = 641;
+    std::vector<uint32_t> cur_rgb(ROWS, 0), lit_rgb(ROWS, 0);
+    int bfi_mode = 1, prev_mode = 1;  // video_config[21:20] equivalent
+    bool prev_settled = false;
+    int prev_pass = -1;
+    // mode-3 band tracking: per-pass anchors (beam, releases); the beam
+    // must advance exactly 8 rows per release
+    long anchor_beam[2] = {-1, -1}, anchor_rel[2] = {0, 0};
+    bool have_anchor[2] = {false, false};
     auto eval = [&]() { t->eval(); };
 
     // scenario, counted in NES frames (scanline-240 entries with the model running)
@@ -61,7 +87,7 @@ int main(int argc, char **argv) {
     const int64_t T_CAP = (int64_t)14e12;    // 14 s cap
 
     t->clk = 0; t->clk_pixel = 0;
-    t->por_n = 0; t->reset_model = 1; t->pause_tb = 0;
+    t->por_n = 0; t->reset_model = 1; t->pause_tb = 0; t->bfi_mode_tb = 1;
     eval();
 
     while (now < T_CAP) {
@@ -102,6 +128,13 @@ int main(int argc, char **argv) {
             else if (phase == 3) { reset_model = false; phase++; }
         }
         t->por_n = por_n; t->reset_model = reset_model; t->pause_tb = pause_tb;
+        // one BFI mode per scenario phase (switches land on pause/reset
+        // edges, inside the 6-frame settle window)
+        {
+            int want = (phase == 2) ? 0 : (phase == 4) ? 2 : (phase == 6) ? 3 : 1;
+            if (want != bfi_mode) { bfi_mode = want; LOG("scenario: bfi mode %d at %lld ns", bfi_mode, (long long)now_ns); }
+        }
+        t->bfi_mode_tb = bfi_mode;
 
         if (rising_clk) {
             // halt monitor
@@ -134,10 +167,14 @@ int main(int argc, char **argv) {
         if (rising_pix) {
             int cy = t->cy;
             if (cy == 100 && cy_q != 100) pass_ins = t->bfi_ins;
-            // BFI black check: picture-centre sample on every active line
-            if (t->cx == 641 && cy < 720 && locked) {
-                if (pass_ins) { if (t->rgb_out != 0) ins_nonzero++; }
-                else if (t->rgb_out != 0) lit_nonzero++;
+            // BFI checks: centre-column sample on every active line
+            if (t->cx == PROBE_CX && cy >= 0 && cy < ROWS) {
+                uint32_t rgb = t->rgb_out;
+                cur_rgb[cy] = rgb;
+                if (locked) {
+                    if (pass_ins) { if (rgb != 0) ins_nonzero++; }
+                    else if (rgb != 0) lit_nonzero++;
+                }
             }
             if (cy == 0 && cy_q != 0 && cy_q >= 0) {
                 LOG("hdmi frame %d: ins=%d game=%d..%d min_age_ns=%lld max_age_ns=%lld wait_ns=%lld", frame_idx, pass_ins, pass_fmin, pass_fmax, (long long)frame_min_age, (long long)frame_max_age, (long long)last_wait);
@@ -153,14 +190,78 @@ int main(int argc, char **argv) {
                     } else if (last_lit >= 0 && pass_fmin != last_lit) {
                         LOG("FAIL: inserted game frame %d, lit was %d, in hdmi frame %d", pass_fmin, last_lit, frame_idx); violations++;
                     }
-                    if (pass_ins && ins_nonzero) { LOG("FAIL: %d non-black centre samples in inserted hdmi frame %d", ins_nonzero, frame_idx); violations++; }
-                    if (!pass_ins && !lit_nonzero) { LOG("FAIL: lit hdmi frame %d all black at centre", frame_idx); violations++; }
+                    int lit_rows = 0;
+                    for (int r = 0; r < ROWS; r++) if (cur_rgb[r] != 0) lit_rows++;
+                    if (bfi_mode == 0) {
+                        // off: both refreshes show the frame
+                        if (lit_rows != ROWS) { LOG("FAIL: mode 0 frame %d has %d/480 lit rows", frame_idx, lit_rows); violations++; }
+                    } else if (bfi_mode == 1) {
+                        if (pass_ins && ins_nonzero) { LOG("FAIL: %d non-black centre samples in inserted hdmi frame %d", ins_nonzero, frame_idx); violations++; }
+                        if (!pass_ins && !lit_nonzero) { LOG("FAIL: lit hdmi frame %d all black at centre", frame_idx); violations++; }
+                    } else if (bfi_mode == 2) {
+                        if (!pass_ins && !lit_nonzero) { LOG("FAIL: mode-2 lit hdmi frame %d all black at centre", frame_idx); violations++; }
+                        // dim: the inserted pass is the exact per-channel
+                        // half of the paired lit pass (same game frame data)
+                        if (pass_ins && !ins_nonzero) { LOG("FAIL: mode-2 inserted hdmi frame %d all black at centre", frame_idx); violations++; }
+                        if (pass_ins && prev_settled && prev_pass == 0 && prev_mode == 2) {
+                            for (int r = 0; r < ROWS; r++) {
+                                uint32_t want = ((lit_rgb[r] & 0xFEFEFEu) >> 1);
+                                if (cur_rgb[r] != want) { LOG("FAIL: mode-2 row %d 0x%06x, want half of lit 0x%06x, in frame %d", r, cur_rgb[r], lit_rgb[r], frame_idx); violations++; break; }
+                            }
+                        }
+                    } else {
+                        // rolling: half the rows lit, complementary pairs,
+                        // band rolling 8 rows per game frame pair
+                        if (lit_rows != ROWS / 2) { LOG("FAIL: mode-3 frame %d has %d/480 lit rows", frame_idx, lit_rows); violations++; }
+                        if (prev_settled && prev_mode == 3 && prev_pass != pass_ins) {
+                            // within a pair the beam is fixed, so an
+                            // even->odd step is an exact complement; an
+                            // odd->even step carries the +8 advance, which
+                            // flips exactly the 16-row trailing-edge band
+                            int nmis = 0;
+                            for (int r = 0; r < ROWS; r++) {
+                                bool a = cur_rgb[r] != 0, b = lit_rgb[r] != 0;
+                                if (a != b) nmis++;
+                            }
+                            if (pass_ins) {
+                                if (nmis != ROWS) { LOG("FAIL: mode-3 %d/480 rows differ in frame %d, want exact complement", nmis, frame_idx); violations++; }
+                            } else {
+                                // the two 8-row groups that legitimately
+                                // agree across the +8 step
+                                long beam_prev = ((long)t->roll_beam - 8 + ROWS) % ROWS;
+                                bool ok = (nmis == ROWS - 16);
+                                for (int k = 0; ok && k < 8; k++) {
+                                    int r1 = (int)((beam_prev + k) % ROWS);
+                                    int r2 = (int)((beam_prev + 240 + k) % ROWS);
+                                    if (((cur_rgb[r1] != 0) != (lit_rgb[r1] != 0)) ||
+                                        ((cur_rgb[r2] != 0) != (lit_rgb[r2] != 0))) ok = false;
+                                }
+                                if (!ok) { LOG("FAIL: mode-3 advance band wrong in frame %d (nmis=%d want 464, groups at %ld/%ld)", frame_idx, nmis, beam_prev, (beam_prev + 240) % ROWS); violations++; }
+                            }
+                            // band cadence: exactly +8 rows per release
+                            // (per pass: the frame-start step and the
+                            // mid-frame release stay 1:1 through pauses)
+                            int ap = pass_ins ? 1 : 0;
+                            long beam_now = (long)t->roll_beam, rel_now = (long)released;
+                            if (!have_anchor[ap]) {
+                                anchor_beam[ap] = beam_now; anchor_rel[ap] = rel_now;
+                                have_anchor[ap] = true;
+                            } else {
+                                long d = (beam_now - 8 * rel_now) - (anchor_beam[ap] - 8 * anchor_rel[ap]);
+                                d %= ROWS; if (d < 0) d += ROWS;
+                                if (d != 0) { LOG("FAIL: mode-3 beam %ld at %ld releases, anchor %ld at %ld, in frame %d", beam_now, rel_now, anchor_beam[ap], anchor_rel[ap], frame_idx); violations++; }
+                            }
+                        }
+                    }
                     if (frame_max_age > 17000000) { LOG("FAIL: max age %lld ns in frame %d", (long long)frame_max_age, frame_idx); violations++; }
                     if (stale_in_frame) { LOG("FAIL: %d stale reads in frame %d", stale_in_frame, frame_idx); violations++; }
                 }
                 frame_idx++;
                 frame_min_age = INT64_MAX;
                 frame_max_age = 0;
+                if (settled && pass_fmax >= 0) { lit_rgb = cur_rgb; prev_settled = true; }
+                else prev_settled = false;
+                prev_pass = pass_ins; prev_mode = bfi_mode;
                 pass_fmin = 0; pass_fmax = -1; lit_nonzero = 0; ins_nonzero = 0; stale_in_frame = 0;
             }
             cy_q = cy;

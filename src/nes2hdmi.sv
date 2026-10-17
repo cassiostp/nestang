@@ -34,8 +34,12 @@ module nes2hdmi #(
 
     // 1: standard 120.00 Hz 480p; 0: native NES rate x2 (855-pixel lines)
     input std_timing,
-    // black frame insertion: 0 off (both 120 Hz frames lit), 1 black
-    // inserted frame, 2 inserted frame at 1/2, 3 at 1/4 brightness
+    // BFI mode (video_config[21:20] in hardware, runtime-switchable):
+    // 0 off (every console frame shown twice, both refreshes lit),
+    // 1 black inserted refresh, 2 dim (50 %) inserted refresh,
+    // 3 rolling scan (prototype): each refresh lights a contiguous half
+    // of the rows, rolling down; the other half is black. The game menu
+    // (overlay) is lit on every refresh in every mode.
     input [1:0] bfi_mode,
 
     // frame lock: halt request for the NES (clk domain), see below
@@ -180,6 +184,23 @@ reg bfi_ins = 1'b1;
 reg bfi_phase = 1'b0;
 reg [15:0] bfi_swap_cnt = 16'd0;
 reg bfi_swap_pending = 1'b0;
+// Mode 3 (rolling scan prototype): each refresh lights a contiguous half of
+// the 480 active rows, the lit half rolling down by ROLL_STEP rows per game
+// frame. The two refreshes of a pair show complementary halves, so like
+// modes 1-2 every row is lit half the time at the same average brightness,
+// but the light is spread over the frame (a band sweeping down, CRT-style)
+// instead of flashing whole frames. One narrow-beam strobe per row per pair
+// keeps the motion-blur reduction of mode 1 (Blur Busters: one strobe per
+// point per refresh; halving the strobe halves eye-tracking blur); a true
+// dark-90 % beam would need a 10x backlight, so the prototype keeps 50 %
+// duty. The beam rolls one full sweep per second (480 rows / 8 per game
+// frame / 60 game frames). The phase swap flips which half the first
+// refresh lights, so DC averages like modes 1-3.
+localparam [9:0] ROLL_ROWS = 10'd480;  // active rows the band rolls over
+localparam [9:0] ROLL_STEP = 10'd8;    // rows per game frame
+localparam [9:0] ROLL_HALF = 10'd240;  // rows lit per refresh
+reg [9:0] roll_beam = 10'd0;           // first lit row of the even refresh
+wire [9:0] roll_next = roll_beam + ROLL_STEP;
 reg at_f0_q = 1'b0;
 reg at_rel_q = 1'b0;
 reg rel_tgl = 1'b0;
@@ -187,6 +208,13 @@ always @(posedge clk_pixel) begin
     at_f0_q <= (cy == 10'd0);
     if ((cy == 10'd0) && !at_f0_q) begin
         bfi_ins <= ~bfi_ins;
+        // the release frame starts here: roll the band now so every HDMI
+        // frame shows one uniform beam position (a mid-frame step would
+        // light 240 +/- 8 rows and break the pair complement)
+        if (bfi_ins) begin
+            if (roll_next >= ROLL_ROWS) roll_beam <= roll_next - ROLL_ROWS;
+            else roll_beam <= roll_next;
+        end
         if (bfi_swap_pending) begin
             bfi_phase <= ~bfi_phase;
             bfi_swap_pending <= 1'b0;
@@ -427,10 +455,14 @@ smooth sm (
 );
 
 // calc rgb value to hdmi. In an inserted BFI frame the whole picture area
-// (border included) is black or dimmed; the menu overlay is exempt so the
-// menu stays steady while the game is paused under it.
+// (border included) is black or dimmed; in rolling mode the unlit half of
+// the rows is black. The menu overlay is exempt so the menu stays steady
+// while the game is paused under it.
 wire bfi_eff_ins = bfi_ins ^ bfi_phase;
-wire bfi_dark = bfi_eff_ins & (bfi_mode != 2'd0) & ~overlay;
+wire [9:0] roll_d = (cy >= roll_beam) ? cy - roll_beam : cy - roll_beam + ROLL_ROWS;
+wire roll_dark = ((roll_d < ROLL_HALF) == bfi_eff_ins);
+wire bfi_dark = ~overlay & ((((bfi_mode == 2'd1) | (bfi_mode == 2'd2)) & bfi_eff_ins) |
+                            ((bfi_mode == 2'd3) & roll_dark));
 reg [23:0] rgb_norm;
 always @* begin
     if (active_d & sl_show) begin
@@ -444,12 +476,10 @@ end
 always @(posedge clk_pixel) begin
     if (!bfi_dark)
         rgb_pre <= rgb_norm;
-    else if (bfi_mode == 2'd1)
-        rgb_pre <= 24'h000000;
     else if (bfi_mode == 2'd2)
         rgb_pre <= {1'b0, rgb_norm[23:17], 1'b0, rgb_norm[15:9], 1'b0, rgb_norm[7:1]};
     else
-        rgb_pre <= {2'b0, rgb_norm[23:18], 2'b0, rgb_norm[15:10], 2'b0, rgb_norm[7:2]};
+        rgb_pre <= 24'h000000;      // black inserted refresh (mode 1) or unlit rolling rows (mode 3)
     pic_pre <= active_d & sl_show & ~overlay & ~bfi_dark;
     dark_pre <= active_d & sl_show & ~overlay & sl_dark & ~bfi_dark;
 end
