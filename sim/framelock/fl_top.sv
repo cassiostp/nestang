@@ -3,17 +3,30 @@
 // block in src/nes.v (gated by the DUT's frame_halt exactly as
 // src/nestang_top.sv gates the NES), synthetic picture/audio stimuli, and
 // taps for the C++ harness. No delays, no file IO: Verilator-clean.
+//
+// With HZ120 the DUT runs the 480p120 timing with a runtime BFI mode input
+// (bfi_mode_tb, video_config[21:20] equivalent, set per scenario phase) and
+// extra taps for the harness's per-mode pixel checks; otherwise the ports
+// exist but are tied (bfi_mode_tb is unused, the taps read zero).
 `timescale 1ns/1ps
+
+`include "variant.vh"
+
 module fl_top (
     input clk,
     input clk_pixel,
     input por_n,            // power-on reset (DUT resetn): once only
     input reset_model,      // reset_nes equivalent (game reload pulses this)
     input pause_tb,         // core_config[17] equivalent
+    input [1:0] bfi_mode_tb,    // video_config[21:20] equivalent, set per scenario phase
     output frame_halt,
     output [8:0] scanline,
     output [8:0] nes_cycle,
     output [9:0] cy,
+    output [10:0] cx,
+    output bfi_ins,
+    output [9:0] roll_beam,     // mode-3 band position, advances per game frame
+    output [23:0] rgb_out,
     output memA_we,
     output [15:0] memA_addr,
     output [15:0] memB_addr,
@@ -71,11 +84,20 @@ module fl_top (
         .short_frame(ppu_short_frame), .is_vbe_sl()
     );
 
+`ifdef HZ120
+    // synthetic picture: each line its own palette index (33..44: all
+    // non-black, so every lit row reads nonzero at the probe column);
+    // synthetic audio: a full-scale 440 Hz sine stepped at the CPU rate
+    reg [5:0] pix_color = 0;
+    always @(posedge clk)
+        pix_color <= 6'd33 + (scanline[3:0] % 12);
+`else
     // synthetic picture: each line its own palette index; synthetic audio: a
     // full-scale 440 Hz sine stepped at the CPU rate
     reg [5:0] pix_color = 0;
     always @(posedge clk)
         pix_color <= scanline[5:0] + 6'd8;
+`endif
     reg [15:0] phase_acc = 0;
     reg [15:0] sample_tb = 0;
     always @(posedge clk)
@@ -93,7 +115,12 @@ module fl_top (
         .sample(sample_tb), .aspect_8x7(1'b0),
         .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(1'b0),
         .video_config(32'd0),
+`ifdef HZ120
+        .std_timing(1'b0),      // native NES rate x2, as in hardware
+        .bfi_mode(bfi_mode_tb),
+`else
         .std_timing(1'b0),      // native NES rate, as in hardware
+`endif
         .overlay(1'b0), .overlay_x(overlay_x), .overlay_y(overlay_y),
         .overlay_color(15'd0),
         .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
@@ -104,6 +131,17 @@ module fl_top (
 
     // taps for the harness
     assign cy = dut.cy;
+`ifdef HZ120
+    assign cx = dut.cx;
+    assign bfi_ins = dut.bfi_ins;
+    assign roll_beam = dut.roll_beam;
+    assign rgb_out = dut.rgb;
+`else
+    assign cx = 11'd0;
+    assign bfi_ins = 1'b0;
+    assign roll_beam = 10'd0;
+    assign rgb_out = 24'd0;
+`endif
     assign memA_we = dut.mem_portA_we;
     assign memA_addr = dut.mem_portA_addr;
     assign memB_addr = dut.mem_portB_addr;

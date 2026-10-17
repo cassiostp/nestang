@@ -13,6 +13,23 @@ if {$argc == 2} {
     set controller "ds2"
 }
 
+# Build variant: standard (720p) or hz120 (480p 120 Hz), from the environment.
+# build.tcl reads TANGCORE_VARIANT: unset, empty or "standard" is the normal
+# build, "hz120" is the 480p 120 Hz build, anything else stops with an error.
+# Only console138k has hz120.
+if {[info exists ::env(TANGCORE_VARIANT)] && $::env(TANGCORE_VARIANT) ne ""} {
+    set variant $::env(TANGCORE_VARIANT)
+} else {
+    set variant "standard"
+}
+if {$variant ne "standard" && $variant ne "hz120"} {
+    error "Unknown TANGCORE_VARIANT \"$variant\" (want standard or hz120)"
+}
+if {$variant eq "hz120" && $dev ne "console138k"} {
+    error "Variant hz120 exists only for console138k (not $dev)"
+}
+puts "TangCore variant: $variant"
+
 # process $dev and $controller
 if {$dev eq "nano20k"} {
     set_device GW2AR-LV18QN88C8/I7 -device_version C
@@ -104,11 +121,20 @@ if {$dev eq "nano20k"} {
     add_file -type verilog "src/pll/gowin_pll_nes.v"
     add_file -type verilog "src/pll/pll_12.v"
     add_file -type verilog "src/usb_hid_host.v"
-    add_file -type sdc "src/nestang.sdc"
+    if {$variant eq "hz120"} {
+        add_file -type sdc "src/nestang_hz120.sdc"
+    } else {
+        add_file -type sdc "src/nestang.sdc"
+    }
     set_option -output_base_name nestang_${dev}_${controller}
 } else {
     error "Unknown device $dev"
 }
+
+# The variant header (src/variant/<variant>/variant.vh) defines HZ120 for
+# the 120 Hz build and nothing for the standard one; the RTL gates every
+# 120 Hz difference on `ifdef HZ120 (see src/nes2hdmi.sv).
+set_option -include_path "src/variant/$variant"
 
 add_file -type verilog "src/iosys/iosys_bl616.v"
 add_file -type verilog "src/iosys/gowin_dpb_menu.v"

@@ -21,6 +21,8 @@
 // host then checks the audio dumps with check_audio.py (dump+log pairs).
 `timescale 1ns/1ps
 
+`include "variant.vh"
+
 module tb_frame_lock;
 
     // set by run.sh (-DCONSOLE60K for the 60K PLL clocks)
@@ -30,7 +32,11 @@ module tb_frame_lock;
     localparam real CLK_MHZ = 21.505376;    // 50*40/93, src/pll/gowin_pll_nes.v
 `endif
     localparam real CLK_HALF_NS = 500.0 / CLK_MHZ;
-    localparam real PIX_HALF_NS = 500.0 / 74.25;    // hclk5/5, both boards
+`ifdef HZ120
+    localparam real PIX_HALF_NS = 500.0 / 54.0;    // 54 MHz pixel clock, 138K only (480p120)
+`else
+    localparam real PIX_HALF_NS = 500.0 / 74.25;    // 74.25 MHz pixel clock, both boards
+`endif
 
     reg clk = 0, clk_pixel = 0;
     always #(CLK_HALF_NS) clk = ~clk;
@@ -93,9 +99,16 @@ module tb_frame_lock;
 
     // synthetic picture: each line its own palette index; synthetic audio: a
     // full-scale 440 Hz sine stepped at the CPU rate
+`ifdef HZ120
+    // (33..44: all non-black, so every lit row reads nonzero)
+`endif
     reg [5:0] pix_color;
     always @(posedge clk)
+`ifdef HZ120
+        pix_color <= 6'd33 + (ppu_scanline[3:0] % 12);
+`else
         pix_color <= ppu_scanline[5:0] + 6'd8;
+`endif
     reg [15:0] phase_acc = 0;
     reg [15:0] sample_tb = 0;
     always @(posedge clk)
@@ -124,7 +137,12 @@ module tb_frame_lock;
         .sample(sample_tb), .aspect_8x7(1'b0),
         .scanlines(1'b0), .sl_darkness(2'd0), .sl_thick(1'b0), .sl_out(1'b0),
         .video_config(32'd0),
+`ifdef HZ120
+        .std_timing(1'b0),      // native NES rate x2, as in hardware
+        .bfi_mode(2'd1),
+`else
         .std_timing(1'b0),      // native NES rate, as in hardware
+`endif
         .overlay(1'b0), .overlay_x(overlay_x), .overlay_y(overlay_y),
         .overlay_color(15'd0),
         .clk_pixel(clk_pixel), .clk_5x_pixel(1'b0),
@@ -163,10 +181,19 @@ module tb_frame_lock;
         if (dut.cy == 10'd0 && cy_q != 10'd0) begin
             $display("hdmi frame %0d: min_age_ns=%0d max_age_ns=%0d wait_ns=%0d", frame_idx, frame_min_age/1000, frame_max_age/1000, last_wait/1000);
             if (locked) frames_checked <= frames_checked + 1;
+`ifdef HZ120
+            // steady locked frames must show current-frame data everywhere:
+            // with BFI each game frame is read twice, so the inserted read
+            // can see data up to almost a full game frame old; older than
+            // that is a tear. (The Verilator harness checks this exactly
+            // with per-line frame tags; this bench keeps the age bound.)
+            if (locked && frame_idx - last_event_frame > 6 && frame_max_age > 17000000) begin
+`else
             // steady locked frames must show fresh data everywhere: the
             // oldest line (231) is ~2.1 ms old at its read; anything near
             // a full frame old is a tear, even if under the stale bound
             if (locked && frame_idx - last_event_frame > 3 && frame_max_age > 3000000) begin
+`endif
                 $display("FAIL: max age %0d ns in frame %0d", frame_max_age/1000, frame_idx);
                 violations = violations + 1;
             end
@@ -188,7 +215,11 @@ module tb_frame_lock;
                 if (w_age < frame_min_age) frame_min_age = w_age;
                 if (w_age > frame_max_age) frame_max_age = w_age;
                 if (w_age < run_min_age) run_min_age = w_age;
+`ifdef HZ120
+                if (w_age > 20000000 && frame_idx - last_event_frame > 6) begin    // stale = previous-frame data (settled frames only)
+`else
                 if (w_age > 20000000) begin    // stale = previous-frame data: over a full NES frame
+`endif
                     $display("FAIL: stale read line %0d age %0d ns at %0d ns (frame %0d)",
                              rd_line, w_age/1000, $time/1000, frame_idx);
                     violations = violations + 1;

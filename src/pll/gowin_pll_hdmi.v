@@ -9,6 +9,8 @@
 
 module gowin_pll_hdmi (clkout, clkin);
 
+`include "variant.vh"
+
 output clkout;
 input clkin;
 
@@ -87,7 +89,11 @@ defparam PLL_inst.ODIV3_SEL = 8;
 defparam PLL_inst.ODIV4_SEL = 8;
 defparam PLL_inst.ODIV5_SEL = 8;
 defparam PLL_inst.ODIV6_SEL = 8;
+`ifdef HZ120
+defparam PLL_inst.MDIV_SEL = 40;    // hz120 480p120: 27 MHz x 40 / 4 = 270 MHz x5 clock (VCO 1080 MHz, in range)
+`else
 defparam PLL_inst.MDIV_SEL = 55;
+`endif
 defparam PLL_inst.MDIV_FRAC_SEL = 0;
 defparam PLL_inst.ODIV0_FRAC_SEL = 0;
 defparam PLL_inst.CLKOUT0_EN = "TRUE";
