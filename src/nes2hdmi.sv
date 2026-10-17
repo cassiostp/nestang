@@ -289,7 +289,7 @@ wire [11:0] XSTOP  = (12'd1280 + XSIZE) >> 1;
 // address (xx_ov) and `active` are delayed back by SM_LAT, so the picture, the overlay and
 // the border land where they did.
 localparam FX_LAT = 13;     // clocks from rgb_pre to rgb, see video_fx.v
-localparam SM_LAT = 9;      // the palette lookup is followed by smooth.v (LAT 8) and the rgb_pre register
+localparam SM_LAT = 10;     // the palette lookup is followed by smooth.v (LAT 8), the overlay/smooth register and the rgb_pre register
 reg cnew = 1'b0;            // the frame buffer address is the first of a source column
 always @(posedge clk_pixel) begin
     reg active_t;
@@ -346,7 +346,7 @@ always @(posedge clk_pixel) begin
     xx_sh <= {xx_sh[8*SM_LAT-9:0], xx};
     act_sh <= {act_sh[SM_LAT-2:0], active};
 end
-assign xx_ov = xx_sh[8*SM_LAT-1 -: 8];
+assign xx_ov = xx_sh[8*(SM_LAT-1)-1 -: 8];  // one tap newer than active_d: the iosys BRAM read and the ovc_q register are the extra clock
 wire active_d = act_sh[SM_LAT-1];
 
 // The weights of the blend, from the same counters (smooth.v). Horizontally the output pixel
@@ -404,14 +404,25 @@ smooth sm (
 // calc rgb value to hdmi. In an inserted BFI frame the whole picture area
 // (border included) is black or dimmed; the menu overlay is exempt so the
 // menu stays steady while the game is paused under it.
-wire bfi_dark = bfi_ins & (bfi_mode != 2'd0) & ~overlay;
+// The smooth output and the overlay colour/flag are registered once more
+// before the mux: menu BRAM -> overlay colour -> mux -> rgb_pre was the
+// longest pixel path at 148.5 MHz (SM_LAT covers the extra clock).
+reg [23:0] sm_rgb_q;
+reg [14:0] ovc_q;
+reg ov_q;
+always @(posedge clk_pixel) begin
+    sm_rgb_q <= sm_rgb;
+    ovc_q <= overlay_color;
+    ov_q <= overlay;
+end
+wire bfi_dark = bfi_ins & (bfi_mode != 2'd0) & ~ov_q;
 reg [23:0] rgb_norm;
 always @* begin
     if (active_d & sl_show) begin
-        if (overlay)
-            rgb_norm = {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};      // BGR5 to RGB8
+        if (ov_q)
+            rgb_norm = {ovc_q[4:0],3'b0,ovc_q[9:5],3'b0,ovc_q[14:10],3'b0};      // BGR5 to RGB8
         else
-            rgb_norm = sm_rgb;
+            rgb_norm = sm_rgb_q;
     end else
         rgb_norm = 24'h303030;
 end
@@ -424,8 +435,8 @@ always @(posedge clk_pixel) begin
         rgb_pre <= {1'b0, rgb_norm[23:17], 1'b0, rgb_norm[15:9], 1'b0, rgb_norm[7:1]};
     else
         rgb_pre <= {2'b0, rgb_norm[23:18], 2'b0, rgb_norm[15:10], 2'b0, rgb_norm[7:2]};
-    pic_pre <= active_d & sl_show & ~overlay & ~bfi_dark;
-    dark_pre <= active_d & sl_show & ~overlay & sl_dark & ~bfi_dark;
+    pic_pre <= active_d & sl_show & ~ov_q & ~bfi_dark;
+    dark_pre <= active_d & sl_show & ~ov_q & sl_dark & ~bfi_dark;
 end
 
 // colour controls, the scanline darkening and the CRT mask
