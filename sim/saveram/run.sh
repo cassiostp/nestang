@@ -13,6 +13,9 @@ sed -e 's/inout  reg \[SDRAM_DATA_WIDTH-1:0\] SDRAM_DQ/inout [SDRAM_DATA_WIDTH-1
 iverilog -g2012 -DSIM -o tb_saveram.out \
     tb_saveram.v iosys_sim.v $RTL/iosys/uart_fixed.v $RTL/dpram.v
 vvp tb_saveram.out
+iverilog -g2012 -DSIM -o tb_rx_desync.out \
+    tb_rx_desync.v iosys_sim.v $RTL/iosys/uart_fixed.v $RTL/dpram.v
+vvp tb_rx_desync.out
 iverilog -g2012 -DSIM -o tb_saveram_sdram.out \
     tb_saveram_sdram.v iosys_sim.v $RTL/iosys/uart_fixed.v
 vvp tb_saveram_sdram.out
