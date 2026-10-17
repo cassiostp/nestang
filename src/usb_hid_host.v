@@ -9,6 +9,8 @@
 // See https://github.com/nand2mario/usb_hid_host
 // 
 // 3/22/2025: add LB and RB buttons, and SNES layout output `game_snes`
+//
+// Microcode source: usb_hid_host_firmware/ukp.s, assembled into usb_hid_host_rom.hex.
 
 module usb_hid_host (
     input  usbclk,		            // 12MHz clock
@@ -47,7 +49,10 @@ wire save;			    // save dat[b] to output register r
 wire [3:0] save_r;      // which register to save to
 wire [3:0] save_b;      // dat[b]
 wire connected;
-reg retry;              // retry because we did not detect a HID device
+wire rxgood;            // pulse: a DATA packet with a good CRC was received
+wire [3:0] rxlen;       // its length
+wire lost;              // pulse: the device stopped answering
+reg retry;              // retry because we did not detect a HID device, or lost it
 
 assign game_snes = {game_rb, game_lb, game_x, game_a, game_r, game_l, game_d, game_u, game_sta, game_sel, game_y, game_b};
 
@@ -55,7 +60,7 @@ ukp ukp(
     .usbrst_n(usbrst_n & ~retry), .usbclk(usbclk),
     .usb_dp(usb_dp), .usb_dm(usb_dm), .usb_oe(),
     .ukprdy(data_rdy), .ukpstb(data_strobe), .ukpdat(ukpdat), .save(save), .save_r(save_r), .save_b(save_b),
-    .connected(connected), .conerr(conerr));
+    .connected(connected), .conerr(conerr), .rxgood(rxgood), .rxlen(rxlen), .lost(lost));
 
 reg  [3:0] rcvct;		// counter for recv data
 reg  data_strobe_r, data_rdy_r;	// delayed data_strobe and data_rdy
@@ -70,7 +75,8 @@ assign dbg_hid_report = {dat[7], dat[6], dat[5], dat[4], dat[3], dat[2], dat[1],
 // reg [3:0] dev = D_GENERIC;			// device type recognized through VID/PID
 // assign dbg_dev = dev;
 
-reg valid = 0;		    // whether current gamepad report is valid
+// for DualShock2 adapter, 2'b10 in d[0] marks an irrelevant record
+wire game_valid = dat[0][1:0] != 2'b10;
 
 always @(posedge usbclk) begin : process_in_data
     data_rdy_r <= data_rdy; data_strobe_r <= data_strobe;
@@ -80,85 +86,58 @@ always @(posedge usbclk) begin : process_in_data
         mouse_dx <= 0; mouse_dy <= 0;
     end
     if(~data_rdy) rcvct <= 0;
-    else begin
-        if(data_strobe && ~data_strobe_r) begin  // rising edge of ukp data strobe
-            dat[rcvct] <= ukpdat;
-
-            if (typ == 1) begin     // keyboard
-                case (rcvct)
-                0: key_modifiers <= ukpdat;
-                2: key1 <= ukpdat;
-                3: key2 <= ukpdat;
-                4: key3 <= ukpdat;
-                5: key4 <= ukpdat;
-                endcase
-            end else if (typ == 2) begin    // mouse
-                case (rcvct)
-                0: mouse_btn <= ukpdat;
-                1: mouse_dx <= ukpdat;
-                2: mouse_dy <= ukpdat;
-                endcase
-            end else if (typ == 3) begin    // gamepad
-                // A typical report layout:
-                // - d[3] is X axis (0: left, 255: right)
-                // - d[4] is Y axis
-                // - d[5][7:4] is buttons YBAX
-                // - d[6][5:4] is buttons START,SELECT
-                // - d[6][1:0] is buttons LB,RB
-                // Variations:
-                // - Some gamepads uses d[0] and d[1] for X and Y axis.
-                // - Some transmits a different set when d[0][1:0] is 2 (a dualshock adapater)
-                case (rcvct)
-                0: begin
-                    if (ukpdat[1:0] != 2'b10) begin
-                        // for DualShock2 adapter, 2'b10 marks an irrelevant record
-                        valid <= 1;
-                        // game_l <= 0; game_r <= 0; game_u <= 0; game_d <= 0;
-                    end else
-                        valid <= 0;
-                    if (ukpdat==8'h00) {game_l, game_r} <= 2'b10;
-                    if (ukpdat==8'h7f) {game_l, game_r} <= 2'b00;
-                    if (ukpdat==8'hff) {game_l, game_r} <= 2'b01;
-                end
-                1: begin
-                    if (ukpdat==8'h00) {game_u, game_d} <= 2'b10;
-                    if (ukpdat==8'h7f) {game_u, game_d} <= 2'b00;
-                    if (ukpdat==8'hff) {game_u, game_d} <= 2'b01;
-                end
-                // 3: if (valid) begin 
-                //     if (ukpdat[7:6]==2'b00) {game_l, game_r} <= 2'b10;
-                //     if (ukpdat[7:6]==2'b11) {game_l, game_r} <= 2'b01;
-                // end
-                // 4: if (valid) begin 
-                //     if (ukpdat[7:6]==2'b00) {game_u, game_d} <= 2'b10;
-                //     if (ukpdat[7:6]==2'b11) {game_u, game_d} <= 2'b01;
-                // end
-                5: if (valid) begin
-                    game_x <= ukpdat[4];
-                    game_a <= ukpdat[5];
-                    game_b <= ukpdat[6];
-                    game_y <= ukpdat[7];
-                end
-                6: if (valid) begin
-                    game_sel <= ukpdat[4];
-                    game_sta <= ukpdat[5];
-                    game_lb <= ukpdat[0];
-                    game_rb <= ukpdat[1];
-                end
-                endcase
-                // TODO: add any special handling if needed 
-                // (using the detected controller type in 'dev')                
+    else if(data_strobe && ~data_strobe_r) begin  // rising edge of ukp data strobe
+        dat[rcvct] <= ukpdat;
+        rcvct <= rcvct + 1;
+    end
+    // Decode only interrupt IN reports, once the device is set up: setup packets
+    // (the zero-length status stages included) are not reports.
+    if (rxgood && connected) begin
+        if (typ == 1 && rxlen >= 6) begin   // keyboard
+            key_modifiers <= dat[0];
+            key1 <= dat[2]; key2 <= dat[3]; key3 <= dat[4]; key4 <= dat[5];
+            report <= 1;
+        end
+        if (typ == 2 && rxlen >= 3) begin   // mouse
+            mouse_btn <= dat[0]; mouse_dx <= dat[1]; mouse_dy <= dat[2];
+            report <= 1;
+        end
+        if (typ == 3 && rxlen >= 7) begin   // gamepad
+            // A typical report layout:
+            // - d[3] is X axis (0: left, 255: right)
+            // - d[4] is Y axis
+            // - d[5][7:4] is buttons YBAX
+            // - d[6][5:4] is buttons START,SELECT
+            // - d[6][1:0] is buttons LB,RB
+            // Variations:
+            // - Some gamepads uses d[0] and d[1] for X and Y axis.
+            // - Some transmits a different set when d[0][1:0] is 2 (a dualshock adapater)
+            if (dat[0]==8'h00) {game_l, game_r} <= 2'b10;
+            if (dat[0]==8'h7f) {game_l, game_r} <= 2'b00;
+            if (dat[0]==8'hff) {game_l, game_r} <= 2'b01;
+            if (dat[1]==8'h00) {game_u, game_d} <= 2'b10;
+            if (dat[1]==8'h7f) {game_u, game_d} <= 2'b00;
+            if (dat[1]==8'hff) {game_u, game_d} <= 2'b01;
+            if (game_valid) begin
+                game_x <= dat[5][4];
+                game_a <= dat[5][5];
+                game_b <= dat[5][6];
+                game_y <= dat[5][7];
+                game_sel <= dat[6][4];
+                game_sta <= dat[6][5];
+                game_lb <= dat[6][0];
+                game_rb <= dat[6][1];
             end
-            rcvct <= rcvct + 1;
+            report <= 1;
         end
     end
-    if(~data_rdy && data_rdy_r && typ != 0)    // falling edge of ukp data ready
-        report <= 1;
-    if (conerr) begin                          // clear everything on connection error
+    if (conerr || ~connected) begin            // clear everything while not set up
         game_l <= 0; game_r <= 0; game_u <= 0; game_d <= 0;
         game_a <= 0; game_b <= 0; game_x <= 0; game_y <= 0;
         game_sel <= 0; game_sta <= 0;
         game_lb <= 0; game_rb <= 0;
+        key_modifiers <= 0; key1 <= 0; key2 <= 0; key3 <= 0; key4 <= 0;
+        mouse_btn <= 0;
     end
 end
 
@@ -179,6 +158,7 @@ always @(posedge usbclk) begin : response_recognition
         end else
             retry <= 1;  // not a HID device, wait a while (200ms) and retry
     end
+    if (lost) retry <= 1;   // set the device up again, from a bus reset
     connected_r <= connected;
     if (~connected & connected_r) typ <= 0;   // clear device type on disconnect
 end
@@ -196,7 +176,10 @@ module ukp(
     output reg save,			// save: regs[save_r] <= dat[save_b]
     output reg [3:0] save_r, save_b,
     output reg connected,
-    output conerr
+    output conerr,
+    output reg rxgood,          // pulse: received a DATA packet with a good CRC
+    output reg [3:0] rxlen,     // its length
+    output reg lost             // pulse: ERRS receive errors in a row
 );
 
     parameter S_OPCODE = 0;
@@ -210,6 +193,8 @@ module ukp(
     parameter S_S2 = 8;
     parameter S_TOGGLE0 = 9;
     parameter S_TOGGLE1 = 10;
+    parameter START_TO = 200;           // START gives up after this many clocks (25 bit times)
+    parameter ERRS = 3;                 // receive errors in a row before `lost`
 
     wire [3:0] inst;
     reg  [3:0] insth;
@@ -230,13 +215,28 @@ module ukp(
     reg [6:0] bitadr = 0;				// 0~127
     reg [7:0] data = 0;					// received data
     reg [2:0] nrztxct, nrzrxct;			// NRZI trans/recv count for bit stuffing
+    // Receive status. START gives up when no packet comes (noans), and IN then returns
+    // at once. The PID is kept and the CRC16 checked, and at the end of IN, `nak` is 0
+    // only for a DATA0/DATA1 packet with a good CRC.
+    wire starting = inst_ready & state == S_OPCODE & inst == 4'b0010;
+    reg  [7:0] stc;                     // clocks waiting in START
+    wire start_to = stc == START_TO;
+    reg  noans;                         // START timed out
+    reg  [7:0] pid;
+    reg  [15:0] crc;                    // CRC16 of the data, 16'h800d when good
+    reg  [1:0] errct;                   // receive errors in a row
+    wire rxbit = dmis ~^ dmi;
+    wire rxeop = ~(dpi | dmi);
+    wire rxdata = ~noans & rxeop & (pid == 8'hc3 | pid == 8'h4b) & crc == 16'h800d & bitadr[2:0] == 0;
+    wire rxhs = ~noans & rxeop & (pid == 8'hd2 | pid == 8'h5a) & bitadr == 16;     // ACK, NAK
     wire interval_cy = interval == 12001;
     wire next = ~(state == S_OPCODE & (
-        inst ==2 & dmi |								// start
+        inst ==2 & dmi & ~start_to |					// start
         (inst==4 || inst==5) & timing != 0 |			// out0/hiz
-        inst ==13 & (~sample | (dpi | dmi) & wk != 1) |	// in 
+        inst ==13 & ~noans & (~sample | (dpi | dmi) & wk != 1) |	// in
         inst ==14 & ~interval_cy						// wait
     ));
+    wire rxend = inst_ready & state == S_OPCODE & inst == 4'b1101 & next;
     wire branch = state == S_B1 & cond;
     wire retpc  = state == S_OPCODE && inst==7  ? 1 : 0;
     wire jmppc  = state == S_OPCODE && inst==15 ? 1 : 0;
@@ -253,6 +253,7 @@ module ukp(
             pc <= 0; connected <= 0; cond <= 0; inst_ready <= 0; state <= S_OPCODE; timing <= 0; 
             mbit <= 0; bitadr <= 0; nak <= 1; ug <= 0;
             save <= 0;
+            stc <= 0; noans <= 0; errct <= 0; rxgood <= 0; lost <= 0;
         end else begin
             dpi <= usb_dp; dmi <= usb_dm;
             save <= 0;		// ensure pulse
@@ -338,18 +339,27 @@ module ukp(
             end
             // start instruction
             dmid <= dmi;
-            if (inst_ready & state == S_OPCODE & inst == 4'b0010) begin // op=start 
+            stc <= starting ? stc + 1 : 0;
+            if (starting) begin                                         // op=start
                 bitadr <= 0; nak <= 1; nrzrxct <= 0;
+                dmis <= 1;                      // the line was idle (J) before SYNC
+                pid <= 0; crc <= 16'hffff;
+                noans <= start_to;
             end else 
                 if(ug==0 && dmi!=dmid) timing <= 1;
                 else                   timing <= timing + 1;
             // IN instruction
             if (sample) begin
-                if (bitadr == 8) nak <= dmi;
                 if(nrzrxct!=6) begin
                     data[6:0] <= data[7:1]; 
-                    data[7] <= dmis ~^ dmi;		    // ~^/^~ is XNOR, testing bit equality
-                    bitadr <= bitadr + 1; nrzon <= 0;
+                    data[7] <= rxbit;		    // ~^/^~ is XNOR, testing bit equality
+                    // SYNC ends at its first 1, wherever START caught it
+                    if (bitadr < 8) bitadr <= rxbit ? 7'd8 : bitadr == 7 ? 7'd7 : bitadr + 1;
+                    else            bitadr <= bitadr + 1;
+                    nrzon <= 0;
+                    if (bitadr == 15) pid <= {rxbit, data[7:1]};
+                    if (bitadr >= 16 && ~rxeop)
+                        crc <= {crc[14:0], 1'b0} ^ (crc[15] ^ rxbit ? 16'h8005 : 16'h0000);
                 end else nrzon <= 1;
                 dmis <= dmi;
                 if(dmis ~^ dmi) nrzrxct <= nrzrxct + 1;
@@ -365,6 +375,16 @@ module ukp(
             interval <= interval_cy ? 0 : interval + 1;
             record1 <= record;
             if (~record & record1) bank <= ~bank;
+            // End of IN: packet status, and the errors in a row
+            rxgood <= 0; lost <= 0;
+            if (rxend) begin
+                nak <= ~rxdata;
+                rxgood <= rxdata;
+                rxlen <= bitadr[6:3] - 4'd4;
+                if (rxdata | rxhs) errct <= 0;
+                else if (errct == ERRS - 1) begin errct <= 0; lost <= 1; end
+                else errct <= errct + 1;
+            end
             // Connection status & WDT
             ukprdyd <= ukprdy;
             nakd <= nak;
@@ -393,7 +413,7 @@ module usb_hid_host_rom(clk, adr, data);
 	input [13:0] adr;
 	output [3:0] data;
 	reg [3:0] data; 
-	reg [3:0] mem [536];
+	reg [3:0] mem [548];
 	initial $readmemh("usb_hid_host_rom.hex", mem);
 	always @(posedge clk) data <= mem[adr];
 endmodule

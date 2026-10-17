@@ -74,6 +74,7 @@ module NES(
 	input         clk,
 	input         reset_nes,
 	input         cold_reset,
+	input         pause,            // 1: freeze the machine (menu pause), all clock enables go low
 	input   [1:0] sys_type,
 	output  [2:0] nes_div,
 	input  [63:0] mapper_flags,
@@ -176,8 +177,8 @@ reg [2:0] div_ppu = 3'd1;
 reg [1:0] div_sys = 2'd0;
 
 // CE's
-wire cpu_ce  = (div_cpu == div_cpu_n);
-wire ppu_ce  = (div_ppu == div_ppu_n);
+wire cpu_ce  = (div_cpu == div_cpu_n) && !pause;
+wire ppu_ce  = (div_ppu == div_ppu_n) && !pause;
 wire cart_ce = (cart_pre & ppu_ce); // First PPU cycle where cpu data is visible.
 
 // Signals
@@ -205,7 +206,8 @@ reg [2:0] cpu_tick_count;
 wire skip_ppu_cycle = (cpu_tick_count == 4) && (ppu_tick == 0);
 
 always @(posedge clk) begin
-	if (~freeze_clocks | ~(div_ppu == (div_ppu_n - 1'b1))) begin
+	// menu pause (or de-jitter): hold the cpu/ppu clock dividers so nothing advances
+	if ((~freeze_clocks | ~(div_ppu == (div_ppu_n - 1'b1))) && !pause) begin
 		if (~skip_ppu_cycle)
 			div_cpu <= cpu_ce || (ppu_ce && div_cpu > div_cpu_n) ? 1'b1 : div_cpu + 1'b1;
 
@@ -359,11 +361,15 @@ APU apu(
 assign sample = sample_a;
 reg [15:0] sample_a;
 
+// sample is unsigned offset-binary with silence at 16'h7FFF/8000 in every
+// path: the mapper mixers halve the inverted APU sample when mixing, so
+// the APU-only path halves it the same way. TangCore: the top level
+// converts to signed for HDMI, see sim/audio.
 always @* begin
 	case (audio_en)
 		0: sample_a = 16'd0;
 		1: sample_a = sample_ext;
-		2: sample_a = sample_inverted;
+		2: sample_a = {1'b0, sample_inverted[15:1]};
 		3: sample_a = sample_ext;
 	endcase
 end

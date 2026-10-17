@@ -1,5 +1,6 @@
 `define RES_720P
 `define GW_IDE
+`define NESTANG_VRC
 
 package configPackage;  
 

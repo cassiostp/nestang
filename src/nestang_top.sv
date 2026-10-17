@@ -89,7 +89,6 @@ wire famicon_kbd = 0;
 wire [3:0] palette_osd = 0;
 wire [2:0] diskside_osd = 0;
 wire blend = 0;
-wire bk_save = 0;
 
 // NES signals
 reg reset_nes = 1;
@@ -121,6 +120,24 @@ wire loading;                 // from iosys or game_data
 wire [7:0] loader_do;
 wire loader_do_valid;
 
+wire [31:0] core_config;      // from iosys
+wire [31:0] video_config;     // from iosys
+wire pause = core_config[17]; // freeze the machine while the game menu is open
+wire frame_halt;              // from nes2hdmi: frame-lock halt, ORed with pause
+wire video_std_timing = 1'b0; // 0: native NES-rate HDMI (1647-pixel lines); 1: standard 60 Hz, for displays that refuse it
+`ifdef VERILATOR
+assign frame_halt = 1'b0; // no nes2hdmi under Verilator: no frame lock
+`endif
+
+// Battery saves (see iosys_bl616.v): WRAM writes seen by the CPU dirty the save.
+wire save_written;
+wire [12:0] sv_addr;
+wire [7:0] sv_din, sv_q;
+wire sv_we, sv_req, sv_ack;
+`ifdef VERILATOR
+assign sv_req = 1'b0;     // no iosys in the Verilator sim: keep the save channel quiet
+`endif
+
 // iosys softcore
 wire        rv_valid;
 reg         rv_ready;
@@ -150,8 +167,9 @@ wor [11:0] joy1_btns, joy2_btns;    // SNES layout (R L X A RT LT DN UP START SE
                                     // Lower 8 bits are NES buttons
 wire [11:0] joy_usb1, joy_usb2;
 wire [11:0] hid1, hid2;             // From BL616
-wire [11:0] joy1 = joy1_btns | hid1 | joy_usb1;
-wire [11:0] joy2 = joy2_btns | hid2 | joy_usb2;
+wire overlay;                       // the menu is shown: the NES gets no buttons
+wire [11:0] joy1 = overlay ? 12'b0 : joy1_btns | hid1 | joy_usb1;
+wire [11:0] joy2 = overlay ? 12'b0 : joy2_btns | hid2 | joy_usb2;
 
 // NES gamepad
 wire [7:0]NES_gamepad_button_state;
@@ -196,7 +214,7 @@ always @(posedge clk) begin
     reset_cnt <= reset_cnt == 0 ? 0 : reset_cnt - 1;
     if (reset_cnt == 0)
 //    if (reset_cnt == 0 && s1)     // for nano
-        sys_resetn <= ~(joy1_btns[5] && joy1_btns[2]);    // 8BitDo Home button = Select + Down
+        sys_resetn <= 1'b1;    // power-on only: the firmware resets games via the loading toggle
 end
 
 `ifndef VERILATOR
@@ -236,7 +254,7 @@ wire [31:0] status;
 
 // Main NES machine
 NES nes(
-    .clk(clk), .reset_nes(reset_nes), .cold_reset(1'b0),
+    .clk(clk), .reset_nes(reset_nes), .cold_reset(1'b0), .pause(pause | frame_halt),
     .sys_type(system_type), .nes_div(nes_ce),
     .mapper_flags(mapper_flags),
     .sample(sample), .color(color),
@@ -263,7 +281,7 @@ NES nes(
     .int_audio(int_audio),    // VRC6
     .ext_audio(ext_audio),
 
-    .apu_ce(), .gg(), .gg_code(), .gg_avail(), .gg_reset(), .emphasis(), .save_written()
+    .apu_ce(), .gg(), .gg_code(), .gg_avail(), .gg_reset(), .emphasis(), .save_written(save_written)
 );
 
 // loader_write -> clock when data available
@@ -312,6 +330,9 @@ sdram_nes sdram (
     .rv_addr({rv_addr[20:2], rv_word}), .rv_din(rv_word ? rv_wdata[31:16] : rv_wdata[15:0]), 
     .rv_ds(rv_ds), .rv_dout(rv_dout), .rv_req(rv_req), .rv_req_ack(rv_req_ack), .rv_we(rv_wstrb != 0)
 `endif
+    // Battery save-RAM: the same 8 KB the mappers route to linear 0x3C0000
+    , .sv_addr({9'b11_1100_000, sv_addr}), .sv_din(sv_din), .sv_we(sv_we),
+    .sv_req(sv_req), .sv_ack(sv_ack), .sv_dout(sv_q)
 );
 
 // ROM parser
@@ -328,7 +349,21 @@ GameLoader loader(
 );
 
 assign int_audio = 1;
-assign ext_audio = (mapper_flags[7:0] == 19) | (mapper_flags[7:0] == 24) | (mapper_flags[7:0] == 26);
+// Only mappers whose mixer is live in cart.sv: 5 (MMC5), 19 (N163), 69 (SS5B),
+// and on the boards that build the VRC family (same condition as cart.sv),
+// 24/26 (VRC6) and 85 (VRC7). Any other mapper must stay out: selecting it
+// reads the undriven cart audio bus instead of the APU mix. See sim/audio.
+`ifdef MEGA138K
+`define NESTANG_TOP_VRC
+`endif
+`ifdef MEGA60K
+`define NESTANG_TOP_VRC
+`endif
+`ifdef NESTANG_TOP_VRC
+assign ext_audio = (mapper_flags[7:0] == 5) | (mapper_flags[7:0] == 19) | (mapper_flags[7:0] == 24) | (mapper_flags[7:0] == 26) | (mapper_flags[7:0] == 69) | (mapper_flags[7:0] == 85);
+`else
+assign ext_audio = (mapper_flags[7:0] == 5) | (mapper_flags[7:0] == 19) | (mapper_flags[7:0] == 69);
+`endif
 
 always @(posedge clk) begin
     clkref <= ~clkref;
@@ -348,6 +383,8 @@ end
 `ifdef VERILATOR
 
 // For verilator, the only peripheral is the compiled-in game data 
+// (no OSD menu under verilator, joysticks are never blanked)
+assign overlay = 1'b0;
 GameData game_data(
     .clk(clk), .reset(~sys_resetn), .downloading(loading), 
     .odata(loader_do), .odata_clk(loader_do_valid));
@@ -355,7 +392,7 @@ GameData game_data(
 `else
 
 // For physical board, there's HDMI, iosys, joypads, and USB
-wire overlay;                   // iosys controls overlay
+                                // iosys controls overlay
 wire [7:0] overlay_x;
 wire [7:0]  overlay_y;
 wire [14:0] overlay_color;      // BGR5
@@ -364,9 +401,13 @@ wire [14:0] overlay_color;      // BGR5
 nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=01100_00000_01000
     .clk(clk), .resetn(sys_resetn),
     .color(color), .cycle(cycle), 
-    .scanline(scanline), .sample(sample >> 1),
+    .scanline(scanline), .sample(pause ? 16'd0 : {~sample[15], sample[14:0]}),  // offset-binary to signed; silent while paused
+    .frame_halt(frame_halt),    // halts the NES once per frame; the pause mute above stays menu-only
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y),
     .overlay_color(overlay_color),
+    .scanlines(core_config[16]), .sl_darkness(core_config[19:18]), .sl_thick(core_config[20]), .sl_out(core_config[21]),
+    .video_config(video_config),
+    .std_timing(video_std_timing),
     .clk_pixel(hclk), .clk_5x_pixel(hclk5),
     .tmds_clk_n(tmds_clk_n), .tmds_clk_p(tmds_clk_p),
     .tmds_d_n(tmds_d_n), .tmds_d_p(tmds_d_p)
@@ -374,14 +415,26 @@ nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=
 
 
 // Connect to BL616 companion MCU for sys module for menu, rom loading...
-iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(21_492_000), .CORE_ID(1) )     // purple nestang logo
+// clk is the PLL's fclk/3 output: 50*40/93 MHz on the 138K boards,
+// 50*49/(2*57) MHz on the 60K/25K ones. FREQ feeds iosys's UART baud divider.
+`ifdef MEGA138K
+localparam IOSYS_FREQ = 21_505_376;
+`else
+localparam IOSYS_FREQ = 21_491_228;
+`endif
+iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(IOSYS_FREQ), .CORE_ID(1),
+              .SAVE_IF(1), .SAVE_AW(13), .SAVE_SYNC(0) )     // purple nestang logo
     sys_inst (
     .clk(clk), .hclk(hclk), .resetn(sys_resetn),
 
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y), .overlay_color(overlay_color),
+    .core_config(core_config), .video_config(video_config),
     .joy1(joy1_btns | joy_usb1), .joy2(joy2_btns | joy_usb2),
     .hid1(hid1), .hid2(hid2),
     .uart_tx(UART_TXD), .uart_rx(UART_RXD),
+
+    .sv_addr(sv_addr), .sv_din(sv_din), .sv_we(sv_we), .sv_q(sv_q),
+    .sv_core_we(save_written), .sv_req(sv_req), .sv_ack(sv_ack),
 
     .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid)
 );

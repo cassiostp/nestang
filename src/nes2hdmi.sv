@@ -13,6 +13,11 @@ module nes2hdmi (
     input [8:0] scanline,
     input [15:0] sample,
     input aspect_8x7,       // 1: 8x7 pixel aspect ratio mode
+    input scanlines,        // core_config[16]: scanlines on
+    input [1:0] sl_darkness,// core_config[19:18]: 25, 50, 75, 100 % dark
+    input sl_thick,         // core_config[20]: thick lines
+    input sl_out,           // core_config[21]: dark output rows instead of an integer scale
+    input [31:0] video_config,  // colour controls, CRT mask and smoothing, see video_fx.v, smooth.v (the LCD grid is unused)
 
     // overlay interface
     input overlay,
@@ -23,6 +28,12 @@ module nes2hdmi (
 	// video clocks
 	input clk_pixel,
 	input clk_5x_pixel,
+
+    // 1: standard 60.00 Hz 720p; 0: native NES rate (1647-pixel lines)
+    input std_timing,
+
+    // frame lock: halt request for the NES (clk domain), see below
+    output frame_halt,
 
     // output [7:0] led,
 
@@ -42,7 +53,10 @@ localparam TOTALWIDTH = 1650;
 localparam TOTALHEIGHT = 750;
 localparam SCALE = 5;
 localparam VIDEOID = 4;
-localparam VIDEO_REFRESH = 60.0;
+localparam VIDEO_REFRESH = 60.0;    // the audio clock regeneration only: the line is NATIVE below
+// 74.25 MHz / (1647x750) = 60.1093 Hz: the largest whole-pixel line at or
+// above the NES 60.0988 Hz (21.477272 MHz / 4 / 89341.5 dots)
+localparam NATIVE_LINE = 1647;
 
 // localparam IDIV_SEL_X5 = 3;
 // localparam FBDIV_SEL_X5 = 54;
@@ -110,6 +124,61 @@ always @(posedge clk) begin
     end
 end
 
+//
+// Frame lock: halt the NES once per frame so the PPU frame stays ahead of
+// the HDMI read and the single framebuffer never tears.
+//
+// The NES frame (60.1775 Hz on console138k, 60.1379 Hz on console60k from the
+// board PLLs, 262 lines of 341 PPU dots) is shorter than the native-rate
+// 720p HDMI frame (60.1093 Hz at 1647 pixels per line, the largest line at
+// or above the NES 60.0988 Hz). Halting the whole machine for the
+// difference (about 8/19 us) once per frame locks the NES to exactly the
+// HDMI rate, 0.017 % fast, with a fixed phase.
+//
+// Phase: the NES waits at the first vblank scanline (240, all of lines 0-239
+// are written by then) and runs again when HDMI reaches RELEASE_ROW near the
+// end of its frame. The NES frame then leads the HDMI frame by about 0.9 ms:
+// the PPU finishes writing line 8 about 271 us before HDMI reads it (the
+// tightest line; reads run slower than writes after that), and the wait
+// absorbs the odd-frame short line and the de-jitter freeze. The release is
+// edge-triggered (one toggle per HDMI frame over a synchroniser) so a late
+// arrival waits for the next frame and the phase is exact every frame after
+// at most two frames, including after reset, game reload and menu pause.
+//
+localparam HALT_LINE = 240;       // NES scanline at which to wait
+localparam RELEASE_ROW = 647;     // HDMI row whose start releases the NES
+
+// HDMI side: one toggle per frame as cy passes RELEASE_ROW
+reg at_rel_q = 1'b0;
+reg rel_tgl = 1'b0;
+always @(posedge clk_pixel) begin
+    at_rel_q <= (cy == RELEASE_ROW);
+    if ((cy == RELEASE_ROW) && !at_rel_q)
+        rel_tgl <= ~rel_tgl;
+end
+
+// NES side: synchronise the toggle, then wait/release
+reg [2:0] rel_sync = 3'b0;
+reg rel_lvl_q = 1'b0;
+wire rel_pulse = rel_sync[2] ^ rel_lvl_q;   // one clk per HDMI frame
+reg halt_req = 1'b0;
+reg was_halt_line = 1'b0;
+always @(posedge clk) begin
+    rel_sync <= {rel_sync[1:0], rel_tgl};
+    rel_lvl_q <= rel_sync[2];
+    was_halt_line <= (scanline == HALT_LINE);
+    if (!resetn) begin
+        rel_sync <= 3'b0;
+        rel_lvl_q <= 1'b0;
+        halt_req <= 1'b0;
+        was_halt_line <= 1'b0;
+    end else if (rel_pulse && halt_req)
+        halt_req <= 1'b0;                       // HDMI at the release row: run
+    else if ((scanline == HALT_LINE) && !was_halt_line)
+        halt_req <= 1'b1;                       // line 239 written: wait
+end
+assign frame_halt = halt_req;
+
 // audio stuff
 //    localparam AUDIO_RATE=32000;        // weird only 32K sampling rate works
 //    localparam AUDIO_RATE=96000;
@@ -138,26 +207,69 @@ end
 
 //
 // Video
-// Scale 256x224 to 1280x720
+// Scale 256x224 to 960x720 (4:3), see scanlines.v for the scanline geometry:
+// with scanlines on, 3 output rows per source line and 896x672, centred.
+// Nearest neighbour; smooth.v blends the source pixels (video_config[19:18]). For that the
+// frame buffer is read twice per source column, the line to show and its neighbour line.
 //
 localparam WIDTH=256;
 localparam HEIGHT=240;
-reg [23:0] rgb;             // actual RGB output
+localparam LINES=224;       // lines of the picture
+wire [23:0] rgb;            // actual RGB output
+reg [23:0] rgb_pre;         // before video_fx
+reg pic_pre;                // rgb_pre is a pixel of the picture, not the border or the overlay
+reg dark_pre;
 reg active                  /* xsynthesis syn_keep=1 */;
 reg [$clog2(WIDTH)-1:0] xx  /* xsynthesis syn_keep=1 */; // scaled-down pixel position
 reg [$clog2(HEIGHT)-1:0] yy /* xsynthesis syn_keep=1 */;
 reg [10:0] xcnt             /* xsynthesis syn_keep=1 */;
 reg [10:0] ycnt             /* xsynthesis syn_keep=1 */;                  // fractional scaling counters
 reg [9:0] cy_r;
-assign mem_portB_addr = yy * WIDTH + xx + 8*256;
-assign overlay_x = xx;
-assign overlay_y = yy;
-localparam XSTART = (1280 - 960) / 2;   // 960:720 = 4:3
-localparam XSTOP = (1280 + 960) / 2;
+
+// scanlines: sl_geom frames are scaled 3 rows per source line, 896x672
+// The LCD grid (video_config[15]) is not offered on the NES: 3.5 output columns per source
+// pixel is not a whole number. Bit 15 is cleared for sl_rows and video_fx, so the picture
+// geometry never depends on it and the grid flags are tied low.
+wire sl_geom, sl_show, sl_dark, sl_last;
+wire [7:0] sl_yy;
+wire [1:0] sl_dk;
+sl_rows sl (
+    .clk(clk_pixel), .cy(cy),
+    .cfg_on(scanlines), .cfg_dark(sl_darkness), .cfg_thick(sl_thick), .cfg_out(sl_out),
+    .cfg_grid(1'b0), .hide(overlay),
+    .rows(3'd3), .dark_thin(3'd1), .dark_thick(3'd2), .lines(8'd224), .top(10'd24),
+    .geom(sl_geom), .pic_top(), .yy(sl_yy), .show(sl_show), .dark(sl_dark), .last(sl_last), .darkness(sl_dk)
+);
+reg [7:0] yy_s;             // source line to show
+always @(posedge clk_pixel) yy_s <= sl_geom ? sl_yy : yy;
+
+// smoothing: the frame buffer is read for line yy_s and for yb_s, one clock each in turn
+wire [1:0] sm_mode;
+wire sm_rd_b;
+wire [23:0] sm_rgb;
+reg [7:0] yb_s;             // the neighbour line to blend with
+wire [7:0] ysel = sm_rd_b ? yb_s : yy_s;
+wire [7:0] xx_ov;           // xx, SM_LAT clocks old
+assign mem_portB_addr = ysel * WIDTH + xx + 8*256;
+assign overlay_x = xx_ov;
+assign overlay_y = yy_s;
+wire [11:0] XSIZE  = sl_geom ? 12'd896 : 12'd960;   // 4:3 on 720 rows, 4:3 on 672 rows
+wire [11:0] XSTART = (12'd1280 - XSIZE) >> 1;
+wire [11:0] XSTOP  = (12'd1280 + XSIZE) >> 1;
 
 // address calculation
 // Assume the video occupies fully on the Y direction, we are upscaling the video by `720/height`.
 // xcnt and ycnt are fractional scaling counters.
+// video_fx follows rgb_pre with FX_LAT register stages. Its first stage is the one that sl_dim
+// used to be (active started at XSTART - 2 then), so active starts FX_LAT - 1 clocks earlier
+// than that, at XSTART - 1 - FX_LAT. The smoothing is between the frame buffer and rgb_pre:
+// rgb_pre comes SM_LAT clocks later than the palette lookup alone would give it, so active
+// starts SM_LAT clocks earlier still. The xx/xcnt counters run with it; the overlay lookup
+// address (xx_ov) and `active` are delayed back by SM_LAT, so the picture, the overlay and
+// the border land where they did.
+localparam FX_LAT = 11;     // clocks from rgb_pre to rgb, see video_fx.v
+localparam SM_LAT = 9;      // the palette lookup is followed by smooth.v (LAT 8) and the rgb_pre register
+reg cnew = 1'b0;            // the frame buffer address is the first of a source column
 always @(posedge clk_pixel) begin
     reg active_t;
     reg [10:0] xcnt_next;
@@ -166,18 +278,21 @@ always @(posedge clk_pixel) begin
     ycnt_next = ycnt + 224;
 
     active_t = 0;
-    if (cx == XSTART - 1) begin
+    if ({1'b0, cx} == XSTART - 12'd1 - FX_LAT - SM_LAT) begin
         active_t = 1;
         active <= 1;
-    end else if (cx == XSTOP - 1) begin
+    end else if ({1'b0, cx} == XSTOP - 12'd1 - FX_LAT - SM_LAT) begin
         active_t = 0;
         active <= 0;
     end
 
+    // the first source column starts with the first pixel, the others when xx changes
+    cnew <= ({1'b0, cx} == XSTART - 12'd2 - FX_LAT - SM_LAT) | ((active_t | active) & (xcnt_next >= XSIZE));
+
     if (active_t | active) begin        // increment xx
         xcnt <= xcnt_next;
-        if (xcnt_next >= 960) begin
-            xcnt <= xcnt_next - 960;
+        if (xcnt_next >= XSIZE) begin
+            xcnt <= xcnt_next - XSIZE;
             xx <= xx + 1;
         end
     end
@@ -187,7 +302,7 @@ always @(posedge clk_pixel) begin
         ycnt <= ycnt_next;
         if (ycnt_next >= 720) begin
             ycnt <= ycnt_next - 720;
-            yy <= yy + 1;
+            if (yy != LINES - 1) yy <= yy + 1;      // (the rows below the picture show the last line)
         end
     end
 
@@ -203,17 +318,88 @@ always @(posedge clk_pixel) begin
 
 end
 
-// calc rgb value to hdmi
-reg [23:0] NES_PALETTE [0:63];
+// xx and active, delayed by SM_LAT
+reg [8*SM_LAT-1:0] xx_sh;
+reg [SM_LAT-1:0] act_sh;
 always @(posedge clk_pixel) begin
-    if (active) begin
-        if (overlay)
-            rgb <= {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};       // BGR5 to RGB8
-        else
-            rgb <= NES_PALETTE[mem_portB_rdata];
-    end else
-        rgb <= 24'h303030;
+    xx_sh <= {xx_sh[8*SM_LAT-9:0], xx};
+    act_sh <= {act_sh[SM_LAT-2:0], active};
 end
+assign xx_ov = xx_sh[8*SM_LAT-1 -: 8];
+wire active_d = act_sh[SM_LAT-1];
+
+// The weights of the blend, from the same counters (smooth.v). Horizontally the output pixel
+// is 256 of the 960 (896) units of a source pixel, vertically 224 of 720.
+localparam [16:0] KX_HALF_960 = (65536 * 128 + 960 / 2) / 960;
+localparam [16:0] KX_HALF_896 = (65536 * 128 + 896 / 2) / 896;
+localparam [16:0] KY_STEP = (65536 * 256 + 224 / 2) / 224;
+localparam [16:0] KY_HALF = (65536 * 128 + 720 / 2) / 720;
+wire [7:0] wx, wy_ax;
+wire hnext, vnext_ax;
+smooth_axis ax (
+    .clk(clk_pixel), .mode(sm_mode), .pos(xcnt), .step(11'd256), .size(XSIZE),
+    .k_step(17'd65536), .k_half(sl_geom ? KX_HALF_896 : KX_HALF_960),
+    .first(xx == 8'd0), .last(xx == 8'd255), .w(wx), .next(hnext)
+);
+smooth_axis ay (
+    .clk(clk_pixel), .mode(sm_mode), .pos(ycnt), .step(11'd224), .size(12'd720),
+    .k_step(KY_STEP), .k_half(KY_HALF),
+    .first(yy_s == 8'd0), .last(yy_s == LINES - 1), .w(wy_ax), .next(vnext_ax)
+);
+
+// Scanline frames show 3 rows per source line: soft blends the first and last row of a line
+// 1/3 towards the line before and after it. Sharp has nothing to blend, the rows are whole.
+reg sl_last_p, sl_show_p;           // the previous output row
+always @(posedge clk_pixel)
+    if (cy[0] != cy_r[0]) begin
+        sl_last_p <= sl_last;
+        sl_show_p <= sl_show;
+    end
+localparam [7:0] W_THIRD = 8'd85;   // round(256 / 3)
+wire row_first = ~sl_show_p | sl_last_p;
+wire geom_blend = (sm_mode == 2'd2) & ((row_first & (yy_s != 8'd0)) | (sl_last & (yy_s != LINES - 1)));
+wire [7:0] wy = sl_geom ? (geom_blend ? W_THIRD : 8'd0) : wy_ax;
+wire vnext = sl_geom ? sl_last : vnext_ax;
+always @(posedge clk_pixel)
+    yb_s <= vnext ? ((yy_s == LINES - 1) ? yy_s : yy_s + 8'd1)
+                  : ((yy_s == 8'd0) ? yy_s : yy_s - 8'd1);
+
+// the palette lookup, and the first-of-column flag with it
+reg [23:0] NES_PALETTE [0:63];
+reg [23:0] pal_q;
+reg cn1, cn2;
+always @(posedge clk_pixel) begin
+    pal_q <= NES_PALETTE[mem_portB_rdata];
+    cn1 <= cnew;
+    cn2 <= cn1;
+end
+
+smooth sm (
+    .clk(clk_pixel), .cy(cy), .cfg(video_config[19:18]), .mode(sm_mode),
+    .rd_b(sm_rd_b), .rd_rgb(pal_q), .col_new(cn2), .wx(wx), .hnext(hnext), .wy(wy),
+    .rgb_out(sm_rgb)
+);
+
+// calc rgb value to hdmi
+always @(posedge clk_pixel) begin
+    if (active_d & sl_show) begin
+        if (overlay)
+            rgb_pre <= {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};      // BGR5 to RGB8
+        else
+            rgb_pre <= sm_rgb;
+    end else
+        rgb_pre <= 24'h303030;
+    pic_pre <= active_d & sl_show & ~overlay;
+    dark_pre <= active_d & sl_show & ~overlay & sl_dark;
+end
+
+// colour controls, the scanline darkening and the CRT mask
+video_fx fx (
+    .clk(clk_pixel), .cx(cx), .cy(cy), .video_config({video_config[31:16], 1'b0, video_config[14:0]}),
+    .rgb_in(rgb_pre), .pic_in(pic_pre), .dark_in(dark_pre), .darkness(sl_dk),
+    .col_last_in(1'b0), .row_last_in(1'b0),
+    .rgb_out(rgb)
+);
 
 // HDMI output.
 logic[2:0] tmds;
@@ -225,13 +411,15 @@ hdmi #( .VIDEO_ID_CODE(VIDEOID),
         .AUDIO_RATE(AUDIO_RATE), 
         .AUDIO_BIT_WIDTH(AUDIO_BIT_WIDTH),
         .START_X(0),
-        .START_Y(0) )
+        .START_Y(0),
+        .NATIVE_FRAME_WIDTH(NATIVE_LINE) )
 
 hdmi( .clk_pixel_x5(clk_5x_pixel), 
         .clk_pixel(clk_pixel), 
         .clk_audio(clk_audio),
         .rgb(rgb), 
         .reset( 0 ),
+        .std_timing(std_timing),
         .audio_sample_word(audio_sample_word),
         .tmds(tmds), 
         .tmds_clock(tmdsClk), 

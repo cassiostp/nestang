@@ -1,12 +1,12 @@
 N=nestang_top
 D=../src
-SRCS=$D/verilator/config.sv $D/verilator/sdram_sim.v $D/apu.v $D/cart.sv $D/compat.v $D/dpram.v \
+SRCS=$D/verilator/config.sv $D/verilator/sdram_sim.v $D/verilator/eseopll_stub.v $D/apu.v $D/cart.sv $D/compat.v $D/dpram.v \
 	$D/EEPROM_24C0x.sv $D/nestang_top.sv $D/nes.v $D/ppu.v \
 	$D/t65/T65_Pack.v $D/t65/T65_ALU.v $D/t65/T65_MCode.v $D/t65/T65.v \
 	$D/game_loader.v $D/game_data.v \
 	$D/mappers/generic.sv $D/mappers/iir_filter.v $D/mappers/JYCompany.sv $D/mappers/misc.sv \
 	$D/mappers/MMC1.sv $D/mappers/MMC2.sv $D/mappers/MMC3.sv $D/mappers/MMC5.sv $D/mappers/Namco.sv \
-	$D/mappers/Sachen.sv $D/mappers/Sunsoft.sv
+	$D/mappers/Sachen.sv $D/mappers/Sunsoft.sv $D/mappers/VRC.sv
 
 DEPS=
 INCLUDES=-I$D -I$D/tang_nano_20k
