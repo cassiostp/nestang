@@ -171,7 +171,7 @@ end
 //
 localparam HALT_LINE = 240;       // NES scanline at which to wait
 localparam RELEASE_ROW = 453;     // HDMI row whose start releases the NES (even frames)
-localparam int BFI_SWAP_FRAMES = 1800;  // game frames between lit/inserted swaps (~30 s)
+localparam BFI_SWAP_FRAMES = 1800;  // game frames between lit/inserted swaps (~30 s)
 
 // HDMI frame parity (toggles every frame) and the BFI phase: the inserted
 // (darkened) frame is bfi_ins ^ bfi_phase, while releases stay on even
@@ -181,6 +181,8 @@ reg bfi_phase = 1'b0;
 reg [15:0] bfi_swap_cnt = 16'd0;
 reg bfi_swap_pending = 1'b0;
 reg at_f0_q = 1'b0;
+reg at_rel_q = 1'b0;
+reg rel_tgl = 1'b0;
 always @(posedge clk_pixel) begin
     at_f0_q <= (cy == 10'd0);
     if ((cy == 10'd0) && !at_f0_q) begin
@@ -190,12 +192,6 @@ always @(posedge clk_pixel) begin
             bfi_swap_pending <= 1'b0;
         end
     end
-end
-
-// HDMI side: one toggle per game frame as cy passes RELEASE_ROW in an even frame
-reg at_rel_q = 1'b0;
-reg rel_tgl = 1'b0;
-always @(posedge clk_pixel) begin
     at_rel_q <= (cy == RELEASE_ROW);
     if ((cy == RELEASE_ROW) && !at_rel_q && !bfi_ins) begin
         rel_tgl <= ~rel_tgl;
