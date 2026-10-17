@@ -17,3 +17,6 @@ src/usb_hid_host_firmware/ukp.lst
 sim/framelock/__pycache__/
 sim/framelock/run_full.log
 sim/*/run_bg.log
+
+# packet sim build output
+sim/packet/build/
