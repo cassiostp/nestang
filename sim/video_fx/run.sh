@@ -11,6 +11,10 @@ set -e
 cd "$(dirname "$0")"
 RTL=../../src
 HDMI=../scanlines/hdmi_stub.v
+# nes2hdmi.sv and the HDMI stub take the build variant from variant.vh; these
+# benches run the standard variant only (the git-history baselines they
+# compare against are 720p).
+VINCL="-I $RTL/variant/standard"
 if command -v python3 >/dev/null 2>&1 && command -v git >/dev/null 2>&1; then
     sh prep.sh
 fi
@@ -27,14 +31,14 @@ vvp tb_iosys_video_config.out
 iverilog -g2012 -o tb_video_fx.out tb_video_fx.v $RTL/video_fx.v $RTL/scanlines.v
 vvp tb_video_fx.out
 
-iverilog -g2012 -o tb_nes_regress.out tb_nes_regress.v $HDMI $RTL/nes2hdmi.sv $RTL/scanlines.v \
+iverilog -g2012 $VINCL -o tb_nes_regress.out tb_nes_regress.v $HDMI $RTL/nes2hdmi.sv $RTL/scanlines.v \
     $RTL/video_fx.v build/nes2hdmi_base.sv build/scanlines_base.v
 vvp tb_nes_regress.out
 
-iverilog -g2012 -o tb_nes_fx.out tb_nes_fx.v $HDMI $RTL/nes2hdmi.sv $RTL/scanlines.v $RTL/video_fx.v
+iverilog -g2012 $VINCL -o tb_nes_fx.out tb_nes_fx.v $HDMI $RTL/nes2hdmi.sv $RTL/scanlines.v $RTL/video_fx.v
 vvp tb_nes_fx.out
 
-iverilog -g2012 -o tb_smooth_regress.out tb_smooth_regress.v $HDMI $RTL/nes2hdmi.sv $RTL/scanlines.v \
+iverilog -g2012 $VINCL -o tb_smooth_regress.out tb_smooth_regress.v $HDMI $RTL/nes2hdmi.sv $RTL/scanlines.v \
     $RTL/video_fx.v build/nes2hdmi_fx.sv
 vvp tb_smooth_regress.out
 if command -v python3 >/dev/null 2>&1; then

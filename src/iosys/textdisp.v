@@ -1,6 +1,8 @@
 // 32x28 text display in 8x8 font, with a picorv32 register I/O interface
 // to print characters to the display.
 
+`include "variant.vh"
+
 module textdisp(
 	input             clk,              // main logic clock
     input             hclk,             // hdmi clock
@@ -60,6 +62,9 @@ gowin_dpb_menu menu_mem (
 
 reg [6:0] logo_addr;
 reg [2:0] logo_xoff;
+`ifdef HZ120
+reg [2:0] font_xoff;
+`endif
 reg logo_active;
 reg [14:0] color_buf;
 reg [7:0] x_r;
@@ -81,8 +86,16 @@ always @* begin             // address and output logic
         mem_addr_b = {1'b0, y[7:3], x[7:3]};
         if (logo_active)
             color = mem_do_b[logo_xoff] ? COLOR_LOGO : COLOR_BACK;
+`ifdef HZ120
+        // Use the latched bit offset from the fetch, not the live x:
+        // at 480p each overlay pixel holds for only 2 HDMI clocks, so x
+        // has already advanced by the time its font byte arrives.
+        else
+            color = mem_do_b[font_xoff] ? (is_cursor ? COLOR_CURSOR : COLOR_TEXT) : COLOR_BACK;
+`else
         else
             color = mem_do_b[x[2:0]] ? (is_cursor ? COLOR_CURSOR : COLOR_TEXT) : COLOR_BACK;
+`endif
     end
     default: mem_addr_b = 0;
     endcase
@@ -110,6 +123,9 @@ always @(posedge hclk) begin    // actual state machine
         logo_y = y - LOGO_Y;
         logo_addr <= {logo_y, 3'b0} + logo_y + logo_x[6:3];
         logo_xoff <= logo_x[2:0];
+`ifdef HZ120
+        font_xoff <= x[2:0];
+`endif
         is_cursor <= x[7:3] == 0;
     end
 

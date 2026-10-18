@@ -10,45 +10,85 @@
 # same DUT, model and checks, engine only). Verilator 5.052 elaborates the
 # real src/ppu.v (array literals and all), so no extraction is needed there.
 #
-# Usage (repo root): sh sim/framelock/run.sh
+# Usage: ./run.sh [standard|hz120|both] (default: both).
+# The standard run covers the console138k and console60k PLL clocks; the
+# hz120 run covers only console138k (the 855-pixel line is too fast for the
+# 60K NES clock to lock) and exercises every BFI mode
+# (video_config[21:20]): mode 1 in run-in/pause/reset, mode 0 in the first
+# 200-frame run, mode 2 in the second, mode 3 (rolling) in the final
+# 150-frame run.
+#
 # Afterwards (host): python3 sim/framelock/check_audio.py \
-#   sim/framelock/build/audio_hdmi_138k.hex sim/framelock/build/tb_138k.log \
-#   sim/framelock/build/audio_hdmi_60k.hex sim/framelock/build/tb_60k.log
+#   sim/framelock/build-standard/audio_hdmi_138k.hex sim/framelock/build-standard/tb_138k.log \
+#   sim/framelock/build-standard/audio_hdmi_60k.hex sim/framelock/build-standard/tb_60k.log
+# and for hz120: python3 sim/framelock/check_audio.py \
+#   sim/framelock/build-hz120/audio_hdmi_138k-hz120.hex sim/framelock/build-hz120/tb_138k-hz120.log
 set -e
 cd "$(dirname "$0")"
 ROOT=$(cd ../.. && pwd)
 RTL=../../src
 SCN=../scanlines
-IV="docker run --rm --name framelock_iv --user $(id -u):$(id -g) -v $ROOT:/w -w /w/sim/framelock tangcore-iv:1"
-VLT="docker run --rm --name framelock_vlt --user $(id -u):$(id -g) -e CCACHE_DISABLE=1 -v $PWD:/w -v $ROOT:/r -w /w verilator/verilator:latest"
-# (verilator resolves file arguments against -Mdir, so absolute paths)
-VSRC=/r/src
-VSCN=/r/sim/scanlines
-# ClockGen is the real scanline/cycle counter from src/ppu.v, extracted at
-# build time (the rest of ppu.v uses array literals iverilog cannot parse).
-# Regenerated every run, so it cannot go stale; the greps fail the run if the
-# extraction misses.
-mkdir -p build
-awk '/^module ClockGen/,/^endmodule/' $RTL/ppu.v > build/clockgen_sim.v
-grep -q '^module ClockGen' build/clockgen_sim.v
-grep -q 'even_frame_toggle' build/clockgen_sim.v
-grep -q 'assign short_frame' build/clockgen_sim.v
-grep -q "vblank_end_sl   = 9'd260" $RTL/ppu.v
-cp $RTL/assets/background.txt build/background.txt
-$IV sh -c "iverilog -g2012 -o build/tb_138k.out tb_frame_lock.v $RTL/nes2hdmi.sv build/clockgen_sim.v $RTL/scanlines.v $RTL/video_fx.v $SCN/hdmi_stub.v"
-echo "iverilog elaboration: ok"
-$VLT --cc --top-module fl_top --prefix Vfl_top -Mdir build/obj -CFLAGS "-O2" \
-  -Wno-PINMISSING -Wno-IMPLICIT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL -Wno-UNDRIVEN \
-  /w/fl_top.sv $VSRC/nes2hdmi.sv $VSRC/ppu.v $VSRC/scanlines.v $VSRC/video_fx.v $VSCN/hdmi_stub.v \
-  --exe /w/tb_frame_lock.cpp > build/verilate.log 2>&1 || { cat build/verilate.log; exit 1; }
-if grep -E "fl_top|tb_frame_lock" build/verilate.log; then echo "new warnings in sim files:"; cat build/verilate.log; exit 1; fi
-docker run --rm --name framelock_make --user "$(id -u):$(id -g)" -v "$PWD:/w" -v "$ROOT:/r" -w /w --entrypoint make verilator/verilator:latest \
-  -C build/obj -f Vfl_top.mk -j20 > build/make.log 2>&1 || { tail -30 build/make.log; exit 1; }
-# console138k PLL: clk 50*40/93 MHz; console60k PLL: clk 50*49/(2*57) MHz
-docker run --rm --name framelock_138k --user "$(id -u):$(id -g)" -v "$PWD:/w" -w /w/build --entrypoint ./obj/Vfl_top verilator/verilator:latest \
-  23250 6734 138k || { tail -20 build/tb_138k.log; exit 1; };
-grep -q "^tb_frame_lock: PASS" build/tb_138k.log
-docker run --rm --name framelock_60k --user "$(id -u):$(id -g)" -v "$PWD:/w" -w /w/build --entrypoint ./obj/Vfl_top verilator/verilator:latest \
-  23266 6734 60k || { tail -20 build/tb_60k.log; exit 1; }
-grep -q "^tb_frame_lock: PASS" build/tb_60k.log
-echo "run.sh: both clock configs PASS"
+
+run_variant() {
+    # $1 = standard | hz120
+    V="$1"
+    B="build-$V"
+    TAG_SFX=""
+    EXTRA_ARG=""
+    if [ "$V" = hz120 ]; then
+        TAG_SFX="-hz120"
+        EXTRA_ARG="hz120"
+    fi
+    IV="docker run --rm --name r6hznes_lock_${V}_iv --user $(id -u):$(id -g) -v $ROOT:/w -w /w/sim/framelock tangcore-iv:1"
+    VLT="docker run --rm --name r6hznes_lock_${V}_vlt --user $(id -u):$(id -g) -e CCACHE_DISABLE=1 -v $PWD:/w -v $ROOT:/r -w /w verilator/verilator:latest"
+    # (verilator resolves file arguments against -Mdir, so absolute paths)
+    VSRC=/r/src
+    VSCN=/r/sim/scanlines
+    # ClockGen is the real scanline/cycle counter from src/ppu.v, extracted at
+    # build time (the rest of ppu.v uses array literals iverilog cannot parse).
+    # Regenerated every run, so it cannot go stale; the greps fail the run if
+    # the extraction misses.
+    mkdir -p "$B"
+    awk '/^module ClockGen/,/^endmodule/' $RTL/ppu.v > "$B/clockgen_sim.v"
+    grep -q '^module ClockGen' "$B/clockgen_sim.v"
+    grep -q 'even_frame_toggle' "$B/clockgen_sim.v"
+    grep -q 'assign short_frame' "$B/clockgen_sim.v"
+    grep -q "vblank_end_sl   = 9'd260" $RTL/ppu.v
+    cp "$RTL/assets/background.txt" "$B/background.txt"
+    $IV sh -c "iverilog -g2012 -I /w/src/variant/$V -o $B/tb_iv.out tb_frame_lock.v /w/src/nes2hdmi.sv $B/clockgen_sim.v /w/src/scanlines.v /w/src/video_fx.v /w/sim/scanlines/hdmi_stub.v"
+    echo "iverilog elaboration ($V): ok"
+    $VLT --cc --top-module fl_top --prefix Vfl_top -Mdir "$B/obj" -CFLAGS "-O2" \
+      "+incdir+$VSRC/variant/$V" \
+      -Wno-PINMISSING -Wno-IMPLICIT -Wno-WIDTHEXPAND -Wno-WIDTHTRUNC -Wno-CASEINCOMPLETE -Wno-UNUSEDSIGNAL -Wno-UNDRIVEN \
+      /w/fl_top.sv $VSRC/nes2hdmi.sv $VSRC/ppu.v $VSRC/scanlines.v $VSRC/video_fx.v $VSCN/hdmi_stub.v \
+      --exe /w/tb_frame_lock.cpp > "$B/verilate.log" 2>&1 || { cat "$B/verilate.log"; exit 1; }
+    if grep -E "fl_top|tb_frame_lock" "$B/verilate.log"; then echo "new warnings in sim files:"; cat "$B/verilate.log"; exit 1; fi
+    docker run --rm --name "r6hznes_lock_${V}_make" --user "$(id -u):$(id -g)" -v "$PWD:/w" -v "$ROOT:/r" -w /w --entrypoint make verilator/verilator:latest \
+      -C "$B/obj" -f Vfl_top.mk -j20 > "$B/make.log" 2>&1 || { tail -30 "$B/make.log"; exit 1; }
+    run_cfg() {
+        # $1 = clk_half_ps, $2 = pix_half_ps, $3 = tag
+        docker run --rm --name "r6hznes_lock_${V}_$3" --user "$(id -u):$(id -g)" -v "$PWD/$B:/w" -w /w --entrypoint ./obj/Vfl_top verilator/verilator:latest \
+          "$1" "$2" "$3" $EXTRA_ARG || { tail -20 "$B/tb_$3.log"; exit 1; };
+        grep -q "^tb_frame_lock: PASS" "$B/tb_$3.log"
+    }
+    if [ "$V" = hz120 ]; then
+        # console138k PLL: clk 50*40/93 MHz. Pixel clock half-period 9259 ps =
+        # 54 MHz (480p120). Only the 138K config runs here: the 855-pixel line
+        # is too fast for the 60K NES clock to lock (free-run 60.1379 Hz
+        # against 60.1504 Hz needed).
+        run_cfg 23250 9259 "138k$TAG_SFX"
+        echo "run.sh (hz120): 138K clock config PASS (60K cannot lock this rate)"
+    else
+        # console138k PLL: clk 50*40/93 MHz; console60k PLL: clk 50*49/(2*57) MHz
+        run_cfg 23250 6734 "138k$TAG_SFX"
+        run_cfg 23266 6734 "60k$TAG_SFX"
+        echo "run.sh (standard): both clock configs PASS"
+    fi
+}
+
+VAR="${1:-both}"
+case "$VAR" in
+    standard|hz120) run_variant "$VAR";;
+    both) run_variant standard; run_variant hz120;;
+    *) echo "usage: $0 [standard|hz120|both]" >&2; exit 2;;
+esac

@@ -3,6 +3,8 @@
 
 `timescale 1ns / 1ps
 
+`include "variant.vh"
+
 module nes2hdmi (
 	input clk,      // nes clock
 	input resetn,
@@ -31,6 +33,15 @@ module nes2hdmi (
 
     // 1: standard 60.00 Hz 720p; 0: native NES rate (1647-pixel lines)
     input std_timing,
+`ifdef HZ120
+    // BFI mode (video_config[21:20] in hardware, runtime-switchable):
+    // 0 off (every console frame shown twice, both refreshes lit),
+    // 1 black inserted refresh, 2 dim (50 %) inserted refresh,
+    // 3 rolling scan (prototype): each refresh lights a contiguous half
+    // of the rows, rolling down; the other half is black. The game menu
+    // (overlay) is lit on every refresh in every mode.
+    input [1:0] bfi_mode,
+`endif
 
     // frame lock: halt request for the NES (clk domain), see below
     output frame_halt,
@@ -47,6 +58,22 @@ module nes2hdmi (
 // NES generates 256x240. We assume the center 256x224 is visible and scale that to 4:3 aspect ratio.
 // https://www.nesdev.org/wiki/Overscan
 
+`ifdef HZ120
+localparam FRAMEWIDTH = 720;
+localparam FRAMEHEIGHT = 480;
+localparam TOTALWIDTH = 858;
+localparam TOTALHEIGHT = 525;
+localparam SCALE = 5;
+localparam VIDEOID = 48;            // 480p120: the 480p60 totals at 54 MHz, for BFI
+localparam VIDEO_REFRESH = 120.0;   // the audio clock regeneration only: the line is NATIVE below
+// 54 MHz / (855x525) = 120.3008 Hz, twice 60.1504 Hz: the largest
+// whole-pixel line at or above twice the NES 60.0988 Hz that the console138k
+// NES clock can still lock (free-run 60.1775 Hz, 7.5 us halt); the 856 line
+// would run 60.0816 Hz, below native, and 855 is too fast for console60k
+// (free-run 60.1379 Hz), so the hz120 variant is console138k-only
+// (21.477272 MHz / 4 / 89341.5 dots)
+localparam NATIVE_LINE = 855;
+`else
 localparam FRAMEWIDTH = 1280;
 localparam FRAMEHEIGHT = 720;
 localparam TOTALWIDTH = 1650;
@@ -57,6 +84,7 @@ localparam VIDEO_REFRESH = 60.0;    // the audio clock regeneration only: the li
 // 74.25 MHz / (1647x750) = 60.1093 Hz: the largest whole-pixel line at or
 // above the NES 60.0988 Hz (21.477272 MHz / 4 / 89341.5 dots)
 localparam NATIVE_LINE = 1647;
+`endif
 
 // localparam IDIV_SEL_X5 = 3;
 // localparam FBDIV_SEL_X5 = 54;
@@ -64,7 +92,11 @@ localparam NATIVE_LINE = 1647;
 // localparam DUTYDA_SEL_X5 = "1000";
 // localparam DYN_SDIV_SEL_X5 = 2;
   
+`ifdef HZ120
+localparam CLKFRQ = 54000;
+`else
 localparam CLKFRQ = 74250;
+`endif
 
 localparam COLLEN = 80;
 localparam AUDIO_BIT_WIDTH = 16;
@@ -124,6 +156,100 @@ always @(posedge clk) begin
     end
 end
 
+`ifdef HZ120
+//
+// Frame lock: halt the NES once per game frame so the PPU frame stays ahead
+// of the HDMI read and the single framebuffer never tears. The HDMI output
+// runs at twice the game rate for black frame insertion (BFI): each game
+// frame is read out twice, once lit and once as the inserted (black or
+// dimmed) frame, so the lock releases the NES once per two HDMI frames.
+//
+// The NES frame (60.1775 Hz on console138k from the board PLL, 262 lines of
+// 341 PPU dots) is shorter than two native-rate 480p120 HDMI frames
+// (120.3008 Hz at 855 pixels per line, the largest line at or above twice
+// the NES 60.0988 Hz that still locks). Halting the whole machine for the
+// difference (about 7.5 us) once per game frame locks the NES to exactly
+// half the HDMI rate, 0.086 % fast, with a fixed phase.
+//
+// Phase: the NES waits at the first vblank scanline (240, all of lines 0-239
+// are written by then) and runs again when HDMI reaches RELEASE_ROW in an
+// even frame. The reader is faster per line than the writer, so the release
+// row has to leave the writer most of the inserted frame plus the rest of
+// the lit frame to stay ahead of the next lit read, while the inserted
+// read (of the frame just lit) runs ahead of the writer overwriting it.
+// The release is edge-triggered (one toggle per two HDMI frames over a
+// synchroniser) so a late arrival waits for the next pair and the phase is
+// exact after at most two game frames, including after reset, game reload
+// and menu pause.
+//
+// LCD image retention: BFI at half the refresh rate always shows the image
+// on frames of the same LCD polarity, leaving a DC bias. Every
+// BFI_SWAP_FRAMES game frames (~30 s) the lit/inserted assignment flips,
+// so the image averages to zero DC over minutes. The flip is armed at a
+// release and takes effect at the next frame start, so one boundary shows
+// two lits or two blacks in a row (alternating); the release cadence never
+// moves, so there is no tear and no audio gap, just one 8 ms duplicate per
+// swap. The menu overlay is exempt from darkening, so the menu itself stays
+// steady while the game behind it keeps alternating.
+//
+localparam HALT_LINE = 240;       // NES scanline at which to wait
+localparam RELEASE_ROW = 453;     // HDMI row whose start releases the NES (even frames)
+localparam BFI_SWAP_FRAMES = 1800;  // game frames between lit/inserted swaps (~30 s)
+
+// HDMI frame parity (toggles every frame) and the BFI phase: the inserted
+// (darkened) frame is bfi_ins ^ bfi_phase, while releases stay on even
+// frames so the game timing never shifts at a swap.
+reg bfi_ins = 1'b1;
+reg bfi_phase = 1'b0;
+reg [15:0] bfi_swap_cnt = 16'd0;
+reg bfi_swap_pending = 1'b0;
+// Mode 3 (rolling scan prototype): each refresh lights a contiguous half of
+// the 480 active rows, the lit half rolling down by ROLL_STEP rows per game
+// frame. The two refreshes of a pair show complementary halves, so like
+// modes 1-2 every row is lit half the time at the same average brightness,
+// but the light is spread over the frame (a band sweeping down, CRT-style)
+// instead of flashing whole frames. One narrow-beam strobe per row per pair
+// keeps the motion-blur reduction of mode 1 (Blur Busters: one strobe per
+// point per refresh; halving the strobe halves eye-tracking blur); a true
+// dark-90 % beam would need a 10x backlight, so the prototype keeps 50 %
+// duty. The beam rolls one full sweep per second (480 rows / 8 per game
+// frame / 60 game frames). The phase swap flips which half the first
+// refresh lights, so DC averages like modes 1-3.
+localparam [9:0] ROLL_ROWS = 10'd480;  // active rows the band rolls over
+localparam [9:0] ROLL_STEP = 10'd8;    // rows per game frame
+localparam [9:0] ROLL_HALF = 10'd240;  // rows lit per refresh
+reg [9:0] roll_beam = 10'd0;           // first lit row of the even refresh
+wire [9:0] roll_next = roll_beam + ROLL_STEP;
+reg at_f0_q = 1'b0;
+reg at_rel_q = 1'b0;
+reg rel_tgl = 1'b0;
+always @(posedge clk_pixel) begin
+    at_f0_q <= (cy == 10'd0);
+    if ((cy == 10'd0) && !at_f0_q) begin
+        bfi_ins <= ~bfi_ins;
+        // the release frame starts here: roll the band now so every HDMI
+        // frame shows one uniform beam position (a mid-frame step would
+        // light 240 +/- 8 rows and break the pair complement)
+        if (bfi_ins) begin
+            if (roll_next >= ROLL_ROWS) roll_beam <= roll_next - ROLL_ROWS;
+            else roll_beam <= roll_next;
+        end
+        if (bfi_swap_pending) begin
+            bfi_phase <= ~bfi_phase;
+            bfi_swap_pending <= 1'b0;
+        end
+    end
+    at_rel_q <= (cy == RELEASE_ROW);
+    if ((cy == RELEASE_ROW) && !at_rel_q && !bfi_ins) begin
+        rel_tgl <= ~rel_tgl;
+        if (bfi_swap_cnt == BFI_SWAP_FRAMES - 1) begin
+            bfi_swap_cnt <= 16'd0;
+            bfi_swap_pending <= 1'b1;
+        end else
+            bfi_swap_cnt <= bfi_swap_cnt + 16'd1;
+    end
+end
+`else
 //
 // Frame lock: halt the NES once per frame so the PPU frame stays ahead of
 // the HDMI read and the single framebuffer never tears.
@@ -156,11 +282,13 @@ always @(posedge clk_pixel) begin
     if ((cy == RELEASE_ROW) && !at_rel_q)
         rel_tgl <= ~rel_tgl;
 end
+`endif
 
-// NES side: synchronise the toggle, then wait/release
+// NES side: synchronise the toggle, then wait/release (one release per
+// game frame: per HDMI frame normally, per two HDMI frames with HZ120)
 reg [2:0] rel_sync = 3'b0;
 reg rel_lvl_q = 1'b0;
-wire rel_pulse = rel_sync[2] ^ rel_lvl_q;   // one clk per HDMI frame
+wire rel_pulse = rel_sync[2] ^ rel_lvl_q;   // one clk per release
 reg halt_req = 1'b0;
 reg was_halt_line = 1'b0;
 always @(posedge clk) begin
@@ -205,12 +333,22 @@ always @(posedge clk_pixel) begin       // crossing clock domain
     audio_sample_word[1] <= audio_sample_word0[1];
 end
 
+`ifdef HZ120
+//
+// Video
+// Scale 256x224 to 640x448 (4:3) in the 720x480 frame with the Integer
+// scale (2 output rows per source line, centred at top 16), or to the full
+// 640x480 frame with the Full scale (core_config[21]); see scanlines.v for
+// the scanline geometry. Nearest neighbour.
+//
+`else
 //
 // Video
 // Scale 256x224 to 960x720 (4:3), see scanlines.v for the scanline geometry:
 // integer scale is 3 output rows per source line and 896x672, centred.
 // Nearest neighbour.
 //
+`endif
 localparam WIDTH=256;
 localparam HEIGHT=240;
 localparam LINES=224;       // lines of the picture
@@ -225,7 +363,18 @@ reg [10:0] xcnt             /* xsynthesis syn_keep=1 */;
 reg [10:0] ycnt             /* xsynthesis syn_keep=1 */;                  // fractional scaling counters
 reg [9:0] cy_r;
 
+`ifdef HZ120
+// scanlines: sl_geom frames are scaled 2 rows per source line, 640x448
+// centred (top 16); at 2 rows per line thin and thick darken 1 row alike.
+localparam [2:0] SL_ROWS = 3'd2;
+localparam [2:0] SL_DTHICK = 3'd1;
+localparam [9:0] SL_TOP = 10'd16;
+`else
 // scanlines: sl_geom frames are scaled 3 rows per source line, 896x672
+localparam [2:0] SL_ROWS = 3'd3;
+localparam [2:0] SL_DTHICK = 3'd2;
+localparam [9:0] SL_TOP = 10'd24;
+`endif
 // The LCD grid (video_config[15]) is not offered on the NES: 3.5 output columns per source
 // pixel is not a whole number. Bit 15 is cleared for sl_rows and video_fx, so the picture
 // geometry never depends on it and the grid flags are tied low.
@@ -236,7 +385,7 @@ sl_rows sl (
     .clk(clk_pixel), .cy(cy),
     .cfg_on(scanlines), .cfg_dark(sl_darkness), .cfg_thick(sl_thick), .cfg_out(sl_out),
     .cfg_grid(1'b0), .hide(overlay),
-    .rows(3'd3), .dark_thin(3'd1), .dark_thick(3'd2), .lines(8'd224), .top(10'd24),
+    .rows(SL_ROWS), .dark_thin(3'd1), .dark_thick(SL_DTHICK), .lines(8'd224), .top(SL_TOP),
     .geom(sl_geom), .pic_top(), .yy(sl_yy), .show(sl_show), .dark(sl_dark), .last(), .darkness(sl_dk)
 );
 reg [7:0] yy_s;             // source line to show
@@ -245,12 +394,22 @@ always @(posedge clk_pixel) yy_s <= sl_geom ? sl_yy : yy;
 assign mem_portB_addr = yy_s * WIDTH + xx + 8*256;
 assign overlay_x = xx;
 assign overlay_y = yy_s;
+`ifdef HZ120
+wire [11:0] XSIZE  = 12'd640;        // 4:3 at 480 lines, both geometries
+wire [11:0] XSTART = (12'd720 - XSIZE) >> 1;
+wire [11:0] XSTOP  = (12'd720 + XSIZE) >> 1;
+`else
 wire [11:0] XSIZE  = sl_geom ? 12'd896 : 12'd960;   // 4:3 on 720 rows, 4:3 on 672 rows
 wire [11:0] XSTART = (12'd1280 - XSIZE) >> 1;
 wire [11:0] XSTOP  = (12'd1280 + XSIZE) >> 1;
+`endif
 
 // address calculation
+`ifdef HZ120
+// Assume the video occupies fully on the Y direction, we are upscaling the video by `480/height`.
+`else
 // Assume the video occupies fully on the Y direction, we are upscaling the video by `720/height`.
+`endif
 // xcnt and ycnt are fractional scaling counters.
 // video_fx follows rgb_pre with FX_LAT register stages. Its first stage is the one that sl_dim
 // used to be (active started at XSTART - 2 then), so active starts FX_LAT - 1 clocks earlier
@@ -283,8 +442,13 @@ always @(posedge clk_pixel) begin
     cy_r <= cy;
     if (cy[0] != cy_r[0]) begin         // increment yy at new lines
         ycnt <= ycnt_next;
+`ifdef HZ120
+        if (ycnt_next >= 480) begin
+            ycnt <= ycnt_next - 480;
+`else
         if (ycnt_next >= 720) begin
             ycnt <= ycnt_next - 720;
+`endif
             if (yy != LINES - 1) yy <= yy + 1;      // (the rows below the picture show the last line)
         end
     end
@@ -301,6 +465,38 @@ always @(posedge clk_pixel) begin
 
 end
 
+`ifdef HZ120
+// calc rgb value to hdmi. In an inserted BFI frame the whole picture area
+// (border included) is black or dimmed; in rolling mode the unlit half of
+// the rows is black. The menu overlay is exempt so the menu stays steady
+// while the game is paused under it.
+reg [23:0] NES_PALETTE [0:63];
+wire bfi_eff_ins = bfi_ins ^ bfi_phase;
+wire [9:0] roll_d = (cy >= roll_beam) ? cy - roll_beam : cy - roll_beam + ROLL_ROWS;
+wire roll_dark = ((roll_d < ROLL_HALF) == bfi_eff_ins);
+wire bfi_dark = ~overlay & ((((bfi_mode == 2'd1) | (bfi_mode == 2'd2)) & bfi_eff_ins) |
+                            ((bfi_mode == 2'd3) & roll_dark));
+reg [23:0] rgb_norm;
+always @* begin
+    if (active & sl_show) begin
+        if (overlay)
+            rgb_norm = {overlay_color[4:0],3'b0,overlay_color[9:5],3'b0,overlay_color[14:10],3'b0};      // BGR5 to RGB8
+        else
+            rgb_norm = NES_PALETTE[mem_portB_rdata];
+    end else
+        rgb_norm = 24'h303030;
+end
+always @(posedge clk_pixel) begin
+    if (!bfi_dark)
+        rgb_pre <= rgb_norm;
+    else if (bfi_mode == 2'd2)
+        rgb_pre <= {1'b0, rgb_norm[23:17], 1'b0, rgb_norm[15:9], 1'b0, rgb_norm[7:1]};
+    else
+        rgb_pre <= 24'h000000;      // black inserted refresh (mode 1) or unlit rolling rows (mode 3)
+    pic_pre <= active & sl_show & ~overlay & ~bfi_dark;
+    dark_pre <= active & sl_show & ~overlay & sl_dark & ~bfi_dark;
+end
+`else
 // calc rgb value to hdmi
 reg [23:0] NES_PALETTE [0:63];
 always @(posedge clk_pixel) begin
@@ -314,6 +510,7 @@ always @(posedge clk_pixel) begin
     pic_pre <= active & sl_show & ~overlay;
     dark_pre <= active & sl_show & ~overlay & sl_dark;
 end
+`endif
 
 // colour controls, the scanline darkening and the CRT mask
 video_fx fx (
