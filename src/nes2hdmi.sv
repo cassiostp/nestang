@@ -36,10 +36,10 @@ module nes2hdmi (
 `ifdef HZ120
     // BFI mode (video_config[21:20] in hardware, runtime-switchable):
     // 0 off (every console frame shown twice, both refreshes lit),
-    // 1 black inserted refresh, 2 dim (50 %) inserted refresh,
-    // 3 rolling scan (prototype): each refresh lights a contiguous half
-    // of the rows, rolling down; the other half is black. The game menu
-    // (overlay) is lit on every refresh in every mode.
+    // 1 black inserted refresh,
+    // 2 bright (Lottes-style: full average brightness, per-pixel clarity),
+    // 3 beam (same budgets, complementary top/bottom halves: softer flicker).
+    // The game menu (overlay) is lit on every refresh in every mode.
     input [1:0] bfi_mode,
 `endif
 
@@ -203,23 +203,22 @@ reg bfi_ins = 1'b1;
 reg bfi_phase = 1'b0;
 reg [15:0] bfi_swap_cnt = 16'd0;
 reg bfi_swap_pending = 1'b0;
-// Mode 3 (rolling scan prototype): each refresh lights a contiguous half of
-// the 480 active rows, the lit half rolling down by ROLL_STEP rows per game
-// frame. The two refreshes of a pair show complementary halves, so like
-// modes 1-2 every row is lit half the time at the same average brightness,
-// but the light is spread over the frame (a band sweeping down, CRT-style)
-// instead of flashing whole frames. One narrow-beam strobe per row per pair
-// keeps the motion-blur reduction of mode 1 (Blur Busters: one strobe per
-// point per refresh; halving the strobe halves eye-tracking blur); a true
-// dark-90 % beam would need a 10x backlight, so the prototype keeps 50 %
-// duty. The beam rolls one full sweep per second (480 rows / 8 per game
-// frame / 60 game frames). The phase swap flips which half the first
-// refresh lights, so DC averages like modes 1-3.
-localparam [9:0] ROLL_ROWS = 10'd480;  // active rows the band rolls over
-localparam [9:0] ROLL_STEP = 10'd8;    // rows per game frame
-localparam [9:0] ROLL_HALF = 10'd240;  // rows lit per refresh
-reg [9:0] roll_beam = 10'd0;           // first lit row of the even refresh
-wire [9:0] roll_next = roll_beam + ROLL_STEP;
+// Mode 2-3 (Lottes-style brightness-preserving BFI): in linear light each
+// pixel's content-frame budget (2x its value, gain 1.0: unchanged average
+// brightness, cf. the Blur Busters / Lottes CRT beam simulator at 2 subframes)
+// is carried as HI = min(1, budget) on one refresh and LO = the remainder on
+// the other, through the precomputed NES_PALETTE_HI/LO tables below (exact
+// sRGB piecewise pair, GAMMA=2.4; worst average-light error 0.37 % of full
+// white, see tools/bfi_lottes.py). Dark and mid pixels (v <= 0.5: every NES
+// colour but the brightest) land wholly in one refresh, i.e. full 50 %
+// clarity; only bright pixels spill over. Mode 2 shows HI on every lit
+// refresh (global parity); mode 3 flips the parity per screen half (top rows
+// HI on lit refreshes, bottom rows HI on inserted ones), so the 60 Hz flicker
+// has no whole-frame flash, at the same per-pixel brightness and clarity.
+// Refresh pairs stay complementary and every pixel alternates HI/LO, so the
+// phase swap below still averages LCD DC exactly as in mode 1.
+// Credit: Mark Rejhon (Blur Busters) & Timothy Lottes (MIT, Dec 2024).
+localparam [9:0] BEAM_SPLIT = 10'd240;  // mode-3 half split (top/bottom)
 reg at_f0_q = 1'b0;
 reg at_rel_q = 1'b0;
 reg rel_tgl = 1'b0;
@@ -227,13 +226,6 @@ always @(posedge clk_pixel) begin
     at_f0_q <= (cy == 10'd0);
     if ((cy == 10'd0) && !at_f0_q) begin
         bfi_ins <= ~bfi_ins;
-        // the release frame starts here: roll the band now so every HDMI
-        // frame shows one uniform beam position (a mid-frame step would
-        // light 240 +/- 8 rows and break the pair complement)
-        if (bfi_ins) begin
-            if (roll_next >= ROLL_ROWS) roll_beam <= roll_next - ROLL_ROWS;
-            else roll_beam <= roll_next;
-        end
         if (bfi_swap_pending) begin
             bfi_phase <= ~bfi_phase;
             bfi_swap_pending <= 1'b0;
@@ -466,17 +458,21 @@ always @(posedge clk_pixel) begin
 end
 
 `ifdef HZ120
-// calc rgb value to hdmi. In an inserted BFI frame the whole picture area
-// (border included) is black or dimmed; in rolling mode the unlit half of
-// the rows is black. The menu overlay is exempt so the menu stays steady
+// calc rgb value to hdmi. Mode 1 blacks the whole picture area (border
+// included) on inserted refreshes; modes 2-3 show the precomputed HI/LO pair
+// instead (see above). The menu overlay is exempt so the menu stays steady
 // while the game is paused under it.
 reg [23:0] NES_PALETTE [0:63];
+reg [23:0] NES_PALETTE_HI [0:63];
+reg [23:0] NES_PALETTE_LO [0:63];
+localparam [23:0] BORDER_HI = 24'h454545;
+localparam [23:0] BORDER_LO = 24'h000000;
 wire bfi_eff_ins = bfi_ins ^ bfi_phase;
-wire [9:0] roll_d = (cy >= roll_beam) ? cy - roll_beam : cy - roll_beam + ROLL_ROWS;
-wire roll_dark = ((roll_d < ROLL_HALF) == bfi_eff_ins);
-wire bfi_dark = ~overlay & ((((bfi_mode == 2'd1) | (bfi_mode == 2'd2)) & bfi_eff_ins) |
-                            ((bfi_mode == 2'd3) & roll_dark));
+wire bfi_lottes = (bfi_mode == 2'd2) | (bfi_mode == 2'd3);
+wire show_hi = ~bfi_eff_ins ^ ((bfi_mode == 2'd3) & (cy >= BEAM_SPLIT));
+wire bfi_dark = ~overlay & (bfi_mode == 2'd1) & bfi_eff_ins;
 reg [23:0] rgb_norm;
+reg [23:0] rgb_hi, rgb_lo;
 always @* begin
     if (active & sl_show) begin
         if (overlay)
@@ -485,16 +481,28 @@ always @* begin
             rgb_norm = NES_PALETTE[mem_portB_rdata];
     end else
         rgb_norm = 24'h303030;
+    if (overlay) begin
+        rgb_hi = rgb_norm;
+        rgb_lo = rgb_norm;
+    end else if (active & sl_show) begin
+        rgb_hi = NES_PALETTE_HI[mem_portB_rdata];
+        rgb_lo = NES_PALETTE_LO[mem_portB_rdata];
+    end else begin
+        rgb_hi = BORDER_HI;
+        rgb_lo = BORDER_LO;
+    end
 end
 always @(posedge clk_pixel) begin
-    if (!bfi_dark)
+    if (bfi_lottes & ~overlay)
+        rgb_pre <= show_hi ? rgb_hi : rgb_lo;
+    else if (!bfi_dark)
         rgb_pre <= rgb_norm;
-    else if (bfi_mode == 2'd2)
-        rgb_pre <= {1'b0, rgb_norm[23:17], 1'b0, rgb_norm[15:9], 1'b0, rgb_norm[7:1]};
     else
-        rgb_pre <= 24'h000000;      // black inserted refresh (mode 1) or unlit rolling rows (mode 3)
-    pic_pre <= active & sl_show & ~overlay & ~bfi_dark;
-    dark_pre <= active & sl_show & ~overlay & sl_dark & ~bfi_dark;
+        rgb_pre <= 24'h000000;      // black inserted refresh (mode 1)
+    // Lottes modes carry real picture data on both refreshes, so both get
+    // the same colour/scanline processing downstream (unlike black BFI).
+    pic_pre <= active & sl_show & ~overlay & (~bfi_dark | bfi_lottes);
+    dark_pre <= active & sl_show & ~overlay & sl_dark & (~bfi_dark | bfi_lottes);
 end
 `else
 // calc rgb value to hdmi
@@ -571,5 +579,205 @@ assign NES_PALETTE[48] = 24'heceeec;  assign NES_PALETTE[49] = 24'ha8ccec;  assi
 assign NES_PALETTE[52] = 24'hecaeec;  assign NES_PALETTE[53] = 24'hecaed4;  assign NES_PALETTE[54] = 24'hecb4b0;  assign NES_PALETTE[55] = 24'he4c490;
 assign NES_PALETTE[56] = 24'hccd278;  assign NES_PALETTE[57] = 24'hb4de78;  assign NES_PALETTE[58] = 24'ha8e290;  assign NES_PALETTE[59] = 24'h98e2b4;
 assign NES_PALETTE[60] = 24'ha0d6e4;  assign NES_PALETTE[61] = 24'ha0a2a0;  assign NES_PALETTE[62] = 24'h000000;  assign NES_PALETTE[63] = 24'h000000;
+
+`ifdef HZ120
+// BEGIN Lottes tables (tools/bfi_lottes.py, sRGB GAMMA=2.4).
+// Per input code: HI = lit-refresh value, LO = remainder refresh.
+// [0] 545454 -> HI 757575 LO 000000
+// [1] 001e74 -> HI 002da0 LO 000000
+// [2] 081090 -> HI 0f1ac5 LO 000000
+// [3] 300088 -> HI 4500ba LO 000000
+// [4] 440064 -> HI 5f008a LO 000000
+// [5] 5c0030 -> HI 800045 LO 000000
+// [6] 540400 -> HI 750800 LO 000000
+// [7] 3c1800 -> HI 552500 LO 000000
+// [8] 202a00 -> HI 2f3d00 LO 000000
+// [9] 083a00 -> HI 0f5200 LO 000000
+// [10] 004000 -> HI 005a00 LO 000000
+// [11] 003c00 -> HI 005500 LO 000000
+// [12] 00323c -> HI 004755 LO 000000
+// [13] 000000 -> HI 000000 LO 000000
+// [14] 000000 -> HI 000000 LO 000000
+// [15] 000000 -> HI 000000 LO 000000
+// [16] 989698 -> HI d0cdd0 LO 000000
+// [17] 084cc4 -> HI 0f6aff LO 00005b
+// [18] 3032ec -> HI 4547ff LO 0000d7
+// [19] 5c1ee4 -> HI 802dff LO 0000c4
+// [20] 8814b0 -> HI ba1ff0 LO 000000
+// [21] a01464 -> HI da1f8a LO 000000
+// [22] 982220 -> HI d0322f LO 000000
+// [23] 783c00 -> HI a55500 LO 000000
+// [24] 545a00 -> HI 757d00 LO 000000
+// [25] 287200 -> HI 3a9d00 LO 000000
+// [26] 087c00 -> HI 0faa00 LO 000000
+// [27] 007628 -> HI 00a23a LO 000000
+// [28] 006678 -> HI 008da5 LO 000000
+// [29] 000000 -> HI 000000 LO 000000
+// [30] 000000 -> HI 000000 LO 000000
+// [31] 000000 -> HI 000000 LO 000000
+// [32] eceeec -> HI ffffff LO d7dbd7
+// [33] 4c9aec -> HI 6ad2ff LO 0000d7
+// [34] 787cec -> HI a5aaff LO 0000d7
+// [35] b062ec -> HI f088ff LO 0000d7
+// [36] e454ec -> HI ff75ff LO c400d7
+// [37] ec58b4 -> HI ff7af5 LO d70000
+// [38] ec6a64 -> HI ff928a LO d70000
+// [39] d48820 -> HI ffba2f LO 990000
+// [40] a0aa00 -> HI dae800 LO 000000
+// [41] 74c400 -> HI a0ff00 LO 005b00
+// [42] 4cd020 -> HI 6aff2f LO 008c00
+// [43] 38cc6c -> HI 4fff95 LO 007e00
+// [44] 38b4cc -> HI 4ff5ff LO 00007e
+// [45] 3c3c3c -> HI 555555 LO 000000
+// [46] 000000 -> HI 000000 LO 000000
+// [47] 000000 -> HI 000000 LO 000000
+// [48] eceeec -> HI ffffff LO d7dbd7
+// [49] a8ccec -> HI e5ffff LO 007ed7
+// [50] bcbcec -> HI ffffff LO 1111d7
+// [51] d4b2ec -> HI fff2ff LO 9900d7
+// [52] ecaeec -> HI ffedff LO d700d7
+// [53] ecaed4 -> HI ffedff LO d70099
+// [54] ecb4b0 -> HI fff5f0 LO d70000
+// [55] e4c490 -> HI ffffc5 LO c45b00
+// [56] ccd278 -> HI ffffa5 LO 7e9200
+// [57] b4de78 -> HI f5ffa5 LO 00b500
+// [58] a8e290 -> HI e5ffc5 LO 00bf00
+// [59] 98e2b4 -> HI d0fff5 LO 00bf00
+// [60] a0d6e4 -> HI daffff LO 009fc4
+// [61] a0a2a0 -> HI daddda LO 000000
+// [62] 000000 -> HI 000000 LO 000000
+// [63] 000000 -> HI 000000 LO 000000
+// HI table (lit refresh):
+assign NES_PALETTE_HI[0] = 24'h757575;
+assign NES_PALETTE_HI[1] = 24'h002da0;
+assign NES_PALETTE_HI[2] = 24'h0f1ac5;
+assign NES_PALETTE_HI[3] = 24'h4500ba;
+assign NES_PALETTE_HI[4] = 24'h5f008a;
+assign NES_PALETTE_HI[5] = 24'h800045;
+assign NES_PALETTE_HI[6] = 24'h750800;
+assign NES_PALETTE_HI[7] = 24'h552500;
+assign NES_PALETTE_HI[8] = 24'h2f3d00;
+assign NES_PALETTE_HI[9] = 24'h0f5200;
+assign NES_PALETTE_HI[10] = 24'h005a00;
+assign NES_PALETTE_HI[11] = 24'h005500;
+assign NES_PALETTE_HI[12] = 24'h004755;
+assign NES_PALETTE_HI[13] = 24'h000000;
+assign NES_PALETTE_HI[14] = 24'h000000;
+assign NES_PALETTE_HI[15] = 24'h000000;
+assign NES_PALETTE_HI[16] = 24'hd0cdd0;
+assign NES_PALETTE_HI[17] = 24'h0f6aff;
+assign NES_PALETTE_HI[18] = 24'h4547ff;
+assign NES_PALETTE_HI[19] = 24'h802dff;
+assign NES_PALETTE_HI[20] = 24'hba1ff0;
+assign NES_PALETTE_HI[21] = 24'hda1f8a;
+assign NES_PALETTE_HI[22] = 24'hd0322f;
+assign NES_PALETTE_HI[23] = 24'ha55500;
+assign NES_PALETTE_HI[24] = 24'h757d00;
+assign NES_PALETTE_HI[25] = 24'h3a9d00;
+assign NES_PALETTE_HI[26] = 24'h0faa00;
+assign NES_PALETTE_HI[27] = 24'h00a23a;
+assign NES_PALETTE_HI[28] = 24'h008da5;
+assign NES_PALETTE_HI[29] = 24'h000000;
+assign NES_PALETTE_HI[30] = 24'h000000;
+assign NES_PALETTE_HI[31] = 24'h000000;
+assign NES_PALETTE_HI[32] = 24'hffffff;
+assign NES_PALETTE_HI[33] = 24'h6ad2ff;
+assign NES_PALETTE_HI[34] = 24'ha5aaff;
+assign NES_PALETTE_HI[35] = 24'hf088ff;
+assign NES_PALETTE_HI[36] = 24'hff75ff;
+assign NES_PALETTE_HI[37] = 24'hff7af5;
+assign NES_PALETTE_HI[38] = 24'hff928a;
+assign NES_PALETTE_HI[39] = 24'hffba2f;
+assign NES_PALETTE_HI[40] = 24'hdae800;
+assign NES_PALETTE_HI[41] = 24'ha0ff00;
+assign NES_PALETTE_HI[42] = 24'h6aff2f;
+assign NES_PALETTE_HI[43] = 24'h4fff95;
+assign NES_PALETTE_HI[44] = 24'h4ff5ff;
+assign NES_PALETTE_HI[45] = 24'h555555;
+assign NES_PALETTE_HI[46] = 24'h000000;
+assign NES_PALETTE_HI[47] = 24'h000000;
+assign NES_PALETTE_HI[48] = 24'hffffff;
+assign NES_PALETTE_HI[49] = 24'he5ffff;
+assign NES_PALETTE_HI[50] = 24'hffffff;
+assign NES_PALETTE_HI[51] = 24'hfff2ff;
+assign NES_PALETTE_HI[52] = 24'hffedff;
+assign NES_PALETTE_HI[53] = 24'hffedff;
+assign NES_PALETTE_HI[54] = 24'hfff5f0;
+assign NES_PALETTE_HI[55] = 24'hffffc5;
+assign NES_PALETTE_HI[56] = 24'hffffa5;
+assign NES_PALETTE_HI[57] = 24'hf5ffa5;
+assign NES_PALETTE_HI[58] = 24'he5ffc5;
+assign NES_PALETTE_HI[59] = 24'hd0fff5;
+assign NES_PALETTE_HI[60] = 24'hdaffff;
+assign NES_PALETTE_HI[61] = 24'hdaddda;
+assign NES_PALETTE_HI[62] = 24'h000000;
+assign NES_PALETTE_HI[63] = 24'h000000;
+// LO table (remainder refresh):
+assign NES_PALETTE_LO[0] = 24'h000000;
+assign NES_PALETTE_LO[1] = 24'h000000;
+assign NES_PALETTE_LO[2] = 24'h000000;
+assign NES_PALETTE_LO[3] = 24'h000000;
+assign NES_PALETTE_LO[4] = 24'h000000;
+assign NES_PALETTE_LO[5] = 24'h000000;
+assign NES_PALETTE_LO[6] = 24'h000000;
+assign NES_PALETTE_LO[7] = 24'h000000;
+assign NES_PALETTE_LO[8] = 24'h000000;
+assign NES_PALETTE_LO[9] = 24'h000000;
+assign NES_PALETTE_LO[10] = 24'h000000;
+assign NES_PALETTE_LO[11] = 24'h000000;
+assign NES_PALETTE_LO[12] = 24'h000000;
+assign NES_PALETTE_LO[13] = 24'h000000;
+assign NES_PALETTE_LO[14] = 24'h000000;
+assign NES_PALETTE_LO[15] = 24'h000000;
+assign NES_PALETTE_LO[16] = 24'h000000;
+assign NES_PALETTE_LO[17] = 24'h00005b;
+assign NES_PALETTE_LO[18] = 24'h0000d7;
+assign NES_PALETTE_LO[19] = 24'h0000c4;
+assign NES_PALETTE_LO[20] = 24'h000000;
+assign NES_PALETTE_LO[21] = 24'h000000;
+assign NES_PALETTE_LO[22] = 24'h000000;
+assign NES_PALETTE_LO[23] = 24'h000000;
+assign NES_PALETTE_LO[24] = 24'h000000;
+assign NES_PALETTE_LO[25] = 24'h000000;
+assign NES_PALETTE_LO[26] = 24'h000000;
+assign NES_PALETTE_LO[27] = 24'h000000;
+assign NES_PALETTE_LO[28] = 24'h000000;
+assign NES_PALETTE_LO[29] = 24'h000000;
+assign NES_PALETTE_LO[30] = 24'h000000;
+assign NES_PALETTE_LO[31] = 24'h000000;
+assign NES_PALETTE_LO[32] = 24'hd7dbd7;
+assign NES_PALETTE_LO[33] = 24'h0000d7;
+assign NES_PALETTE_LO[34] = 24'h0000d7;
+assign NES_PALETTE_LO[35] = 24'h0000d7;
+assign NES_PALETTE_LO[36] = 24'hc400d7;
+assign NES_PALETTE_LO[37] = 24'hd70000;
+assign NES_PALETTE_LO[38] = 24'hd70000;
+assign NES_PALETTE_LO[39] = 24'h990000;
+assign NES_PALETTE_LO[40] = 24'h000000;
+assign NES_PALETTE_LO[41] = 24'h005b00;
+assign NES_PALETTE_LO[42] = 24'h008c00;
+assign NES_PALETTE_LO[43] = 24'h007e00;
+assign NES_PALETTE_LO[44] = 24'h00007e;
+assign NES_PALETTE_LO[45] = 24'h000000;
+assign NES_PALETTE_LO[46] = 24'h000000;
+assign NES_PALETTE_LO[47] = 24'h000000;
+assign NES_PALETTE_LO[48] = 24'hd7dbd7;
+assign NES_PALETTE_LO[49] = 24'h007ed7;
+assign NES_PALETTE_LO[50] = 24'h1111d7;
+assign NES_PALETTE_LO[51] = 24'h9900d7;
+assign NES_PALETTE_LO[52] = 24'hd700d7;
+assign NES_PALETTE_LO[53] = 24'hd70099;
+assign NES_PALETTE_LO[54] = 24'hd70000;
+assign NES_PALETTE_LO[55] = 24'hc45b00;
+assign NES_PALETTE_LO[56] = 24'h7e9200;
+assign NES_PALETTE_LO[57] = 24'h00b500;
+assign NES_PALETTE_LO[58] = 24'h00bf00;
+assign NES_PALETTE_LO[59] = 24'h00bf00;
+assign NES_PALETTE_LO[60] = 24'h009fc4;
+assign NES_PALETTE_LO[61] = 24'h000000;
+assign NES_PALETTE_LO[62] = 24'h000000;
+assign NES_PALETTE_LO[63] = 24'h000000;
+// border 303030 -> HI 24'h454545 LO 24'h000000
+`endif
 
 endmodule

@@ -25,7 +25,7 @@ module fl_top (
     output [9:0] cy,
     output [10:0] cx,
     output bfi_ins,
-    output [9:0] roll_beam,     // mode-3 band position, advances per game frame
+    output [9:0] roll_beam,     // unused (kept for harness shape; mode 3 is static halves now)
     output [23:0] rgb_out,
     output memA_we,
     output [15:0] memA_addr,
@@ -134,7 +134,7 @@ module fl_top (
 `ifdef HZ120
     assign cx = dut.cx;
     assign bfi_ins = dut.bfi_ins;
-    assign roll_beam = dut.roll_beam;
+    assign roll_beam = 10'd0;
     assign rgb_out = dut.rgb;
 `else
     assign cx = 11'd0;
