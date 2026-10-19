@@ -16,7 +16,18 @@ RTL := $(COSIM)/../../src
 GEN := $(COSIM)/build/gen
 OBJ := $(COSIM)/build/obj
 # The container user may have no writable home (CI runners): no ccache.
-DOCKER := docker run --rm --user "$(shell id -u):$(shell id -g)" -e CCACHE_DISABLE=1
+# Runner: simrun when present (persistent ccache + full-core env), else plain docker.
+DOCKER_RUN ?= $(shell command -v simrun >/dev/null 2>&1 && echo simrun || echo docker run --rm)
+# ccache: simrun mounts a persistent /ccache (CCACHE_DIR), so Verilator
+# builds cache there; without it there is no cache to keep, so keep the old
+# disable. (The Verilator-generated makefiles already prefix compiles with
+# $(OBJCACHE), which defaults to ccache: nothing else to set.)
+ifeq ($(findstring simrun,$(DOCKER_RUN)),simrun)
+CCACHE_OFF :=
+else
+CCACHE_OFF := -e CCACHE_DISABLE=1
+endif
+DOCKER := $(DOCKER_RUN) --user "$(shell id -u):$(shell id -g)" $(CCACHE_OFF)
 VMOUNT := -v "$(COSIM)/../..:/coresim-src:ro" -v "$(COSIM)/build:/coresim-build" -w /coresim-build
 VERILATOR := $(DOCKER) $(VMOUNT) verilator/verilator:latest
 IVERILOG := $(DOCKER) -v "$(COSIM)/../..:/coresim-src:ro" -v "$(COSIM)/build:/coresim-build" -w /coresim-build tangcore-iv:1

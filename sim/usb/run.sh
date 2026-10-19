@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 RTL=../../src
 TESTS=${*:-"plug fastdev slowdev slowaddr cfgbusy restart restart2 sleepy stall drop glitch dead nakpad kbd mouse badcrc unplug"}
 ORIG_FAIL="plug fastdev slowaddr cfgbusy sleepy stall drop glitch dead badcrc"
-JOBS=${JOBS:-8}
+JOBS=${JOBS:-$(nproc)}
 if command -v git >/dev/null 2>&1; then sh prep.sh; fi
 
 mkdir -p build/fix

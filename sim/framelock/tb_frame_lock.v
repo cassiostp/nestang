@@ -15,7 +15,7 @@
 // HDMI-side step exceeds twice the largest input step.
 //
 // Run from the repo root (COMMON.md docker pattern):
-//   docker run --rm --name nestear_lock --user $(id -u):$(id -g) -v $PWD:/w \
+//   simrun --name ${SIM_PREFIX:-sim$$}_lock --user $(id -u):$(id -g) -v $PWD:/w \
 //     -w /w/sim/framelock tangcore-iv:1 sh run.sh
 // run.sh runs the bench twice (console138k and console60k PLL clocks) and the
 // host then checks the audio dumps with check_audio.py (dump+log pairs).

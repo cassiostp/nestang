@@ -5,6 +5,13 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 src=$(cd "$here/../.." && pwd)
+# Runner: simrun when present (persistent ccache + full-core env), else plain docker.
+DOCKER_RUN=${DOCKER_RUN:-$(command -v simrun >/dev/null 2>&1 && echo simrun || echo "docker run --rm")};
+# ccache: simrun mounts a persistent /ccache (CCACHE_DIR), so the Verilator
+# build caches there; without it there is no cache to keep, so keep the old
+# disable. (The generated makefiles already prefix compiles with $(OBJCACHE),
+# which defaults to ccache: nothing else to set.)
+case "$DOCKER_RUN" in *simrun*) CCACHE_OFF=;; *) CCACHE_OFF="-e CCACHE_DISABLE=1";; esac
 mkdir -p "$here/build"
 python3 "$here/mkrom.py" "$here/build/game.hex" "$here/build/game.nes"
 size=$(wc -c < "$here/build/game.nes")
@@ -15,10 +22,10 @@ sed -e '/^\toutput       prg_allow,$/d' "$src/src/mappers/generic.sv" > "$here/b
 ! grep -q "output       prg_allow," "$here/build/generic_sim.sv"
 test $(diff "$src/src/mappers/generic.sv" "$here/build/generic_sim.sv" | grep -c '^[<>]') -eq 1
 D=/src/src
-docker run --rm --user "$(id -u):$(id -g)" -e CCACHE_DISABLE=1 \
+$DOCKER_RUN --user "$(id -u):$(id -g)" $CCACHE_OFF \
     -v "$src:/src:ro" -v "$here:/gs:ro" -v "$here/build:/out" -w /out \
     verilator/verilator:latest \
-    --cc --exe --build -j 8 --top-module nestang_top --public-flat-rw \
+    --cc --exe --build -j "${JOBS:-$(nproc)}" --top-module nestang_top --public-flat-rw \
     -Wno-fatal -Wno-WIDTHEXPAND -Wno-CASEOVERLAP -Mdir obj -o gamesave \
     -I$D -CFLAGS -O2 \
     $D/verilator/config.sv $D/verilator/sdram_sim.v $D/apu.v $D/cart.sv $D/compat.v $D/dpram.v \
@@ -29,5 +36,5 @@ docker run --rm --user "$(id -u):$(id -g)" -e CCACHE_DISABLE=1 \
     $D/mappers/MMC1.sv $D/mappers/MMC2.sv $D/mappers/MMC3.sv $D/mappers/MMC5.sv $D/mappers/Namco.sv \
     $D/mappers/Sachen.sv $D/mappers/Sunsoft.sv /gs/main.cpp > "$here/build/verilate.log" 2>&1 \
     || { tail -40 "$here/build/verilate.log"; exit 1; }
-docker run --rm --user "$(id -u):$(id -g)" -v "$here/build:/out" -w /out --entrypoint /out/obj/gamesave \
+    $DOCKER_RUN --user "$(id -u):$(id -g)" -v "$here/build:/out" -w /out --entrypoint /out/obj/gamesave \
     verilator/verilator:latest +rom=/out/game.hex +size=$size

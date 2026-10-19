@@ -1,7 +1,8 @@
 #!/bin/sh
-# VRC/MMC5 regression (iverilog). From the repo root:
-#   docker run --rm --name <p>_mappers --user $(id -u):$(id -g) \
+# VRC/MMC5 regression (iverilog). From the repo root, e.g.:
+#   simrun --name ${SIM_PREFIX:-sim$$}_mappers --user $(id -u):$(id -g) \
 #     -v $PWD:/w -w /w/sim/mappers tangcore-iv:1 sh run.sh
+# (simrun is an optional local helper; plain `docker run --rm` works too.)
 # The VRC7 OPLL is VHDL, so simulation uses src/verilator/eseopll_stub.v
 # (VRC7 FM is silent in sim; the Gowin builds use the real VM2413).
 # The grep gates below tie the bench's wiring to cart.sv / build.tcl /

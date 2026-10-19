@@ -1,8 +1,9 @@
 #!/bin/sh
 # Scanline sims (iverilog). Usage: ./run.sh [standard|hz120|both] (default: both).
 # Run inside tangcore-iv:1 (see AGENTS.md), e.g.:
-#   docker run --rm --name r6hznes_scan --user $(id -u):$(id -g) -v $PWD/../..:/w \
+#   simrun --name ${SIM_PREFIX:-sim$$}_scan --user $(id -u):$(id -g) -v $PWD/../..:/w \
 #     -w /w/sim/scanlines tangcore-iv:1 sh run.sh both
+# (simrun is an optional local helper; plain `docker run --rm` works too.)
 #   tb_scanlines     the row generator and the darkening (src/scanlines.v, variant-free)
 #   tb_nes_scaler    nes2hdmi whole frames, with a stub for the HDMI part
 # The hz120 run also dumps sim frames to frames/hz120_*.ppm.

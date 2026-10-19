@@ -55,6 +55,11 @@ Halt at NES scanline 240 (`HALT_LINE`), release at HDMI row 647 (`RELEASE_ROW`) 
 
 ## Simulations (`sim/*/README.md` says how to run; iverilog in `tangcore-iv:1`)
 
+Sim scripts use `simrun` when it is on PATH (else `docker run --rm`);
+set `SIM_PREFIX` to namespace container names when sharing the machine.
+`simrun` is an optional local helper (persistent ccache + full-core env),
+not part of the repositories.
+
 - `audio`: mixer silence/DC and `FFFF -> halved` sign handling.
 - `cosim`: Verilator model of the real `iosys_bl616`+`sdram_nes` for firmware co-sim, no game/video/audio.
 - `framelock`: real `nes2hdmi` vs a cycle-exact clock model over 600+ frames at both console clocks.

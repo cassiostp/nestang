@@ -1,7 +1,8 @@
 #!/bin/sh
-# NES audio sample-format sim (iverilog). From the repo root:
-#   docker run --rm --name <p>_audio --user $(id -u):$(id -g) \
+# NES audio sample-format sim (iverilog). From the repo root, e.g.:
+#   simrun --name ${SIM_PREFIX:-sim$$}_audio --user $(id -u):$(id -g) \
 #     -v $PWD:/w -w /w/sim/audio tangcore-iv:1 sh run.sh
+# (simrun is an optional local helper; plain `docker run --rm` works too.)
 # extract.pl (perl, in the image) makes iverilog copies of the real mixer
 # modules under build/; the grep gates at the end tie the bench's conversion
 # functions to the expressions actually in nes.v / nestang_top.sv.

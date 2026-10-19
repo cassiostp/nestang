@@ -28,6 +28,13 @@ cd "$(dirname "$0")"
 ROOT=$(cd ../.. && pwd)
 RTL=../../src
 SCN=../scanlines
+# Runner: simrun when present (persistent ccache + full-core env), else plain docker.
+DOCKER_RUN=${DOCKER_RUN:-$(command -v simrun >/dev/null 2>&1 && echo simrun || echo "docker run --rm")};
+# ccache: simrun mounts a persistent /ccache (CCACHE_DIR), so the Verilator
+# build caches there; without it there is no cache to keep, so keep the old
+# disable. (The generated makefiles already prefix compiles with $(OBJCACHE),
+# which defaults to ccache: nothing else to set.)
+case "$DOCKER_RUN" in *simrun*) CCACHE_OFF=;; *) CCACHE_OFF="-e CCACHE_DISABLE=1";; esac
 
 run_variant() {
     # $1 = standard | hz120
@@ -39,8 +46,8 @@ run_variant() {
         TAG_SFX="-hz120"
         EXTRA_ARG="hz120"
     fi
-    IV="docker run --rm --name r6hznes_lock_${V}_iv --user $(id -u):$(id -g) -v $ROOT:/w -w /w/sim/framelock tangcore-iv:1"
-    VLT="docker run --rm --name r6hznes_lock_${V}_vlt --user $(id -u):$(id -g) -e CCACHE_DISABLE=1 -v $PWD:/w -v $ROOT:/r -w /w verilator/verilator:latest"
+    IV="$DOCKER_RUN --name ${SIM_PREFIX:-sim$$}_r6hznes_lock_${V}_iv --user $(id -u):$(id -g) -v $ROOT:/w -w /w/sim/framelock tangcore-iv:1"
+    VLT="$DOCKER_RUN --name ${SIM_PREFIX:-sim$$}_r6hznes_lock_${V}_vlt --user $(id -u):$(id -g) $CCACHE_OFF -v $PWD:/w -v $ROOT:/r -w /w verilator/verilator:latest"
     # (verilator resolves file arguments against -Mdir, so absolute paths)
     VSRC=/r/src
     VSCN=/r/sim/scanlines
@@ -63,11 +70,11 @@ run_variant() {
       /w/fl_top.sv $VSRC/nes2hdmi.sv $VSRC/ppu.v $VSRC/scanlines.v $VSRC/video_fx.v $VSCN/hdmi_stub.v \
       --exe /w/tb_frame_lock.cpp > "$B/verilate.log" 2>&1 || { cat "$B/verilate.log"; exit 1; }
     if grep -E "fl_top|tb_frame_lock" "$B/verilate.log"; then echo "new warnings in sim files:"; cat "$B/verilate.log"; exit 1; fi
-    docker run --rm --name "r6hznes_lock_${V}_make" --user "$(id -u):$(id -g)" -v "$PWD:/w" -v "$ROOT:/r" -w /w --entrypoint make verilator/verilator:latest \
+    $DOCKER_RUN --name "${SIM_PREFIX:-sim$$}_r6hznes_lock_${V}_make" --user "$(id -u):$(id -g)" -v "$PWD:/w" -v "$ROOT:/r" -w /w --entrypoint make verilator/verilator:latest \
       -C "$B/obj" -f Vfl_top.mk -j20 > "$B/make.log" 2>&1 || { tail -30 "$B/make.log"; exit 1; }
     run_cfg() {
         # $1 = clk_half_ps, $2 = pix_half_ps, $3 = tag
-        docker run --rm --name "r6hznes_lock_${V}_$3" --user "$(id -u):$(id -g)" -v "$PWD/$B:/w" -w /w --entrypoint ./obj/Vfl_top verilator/verilator:latest \
+        $DOCKER_RUN --name "${SIM_PREFIX:-sim$$}_r6hznes_lock_${V}_$3" --user "$(id -u):$(id -g)" -v "$PWD/$B:/w" -w /w --entrypoint ./obj/Vfl_top verilator/verilator:latest \
           "$1" "$2" "$3" $EXTRA_ARG || { tail -20 "$B/tb_$3.log"; exit 1; };
         grep -q "^tb_frame_lock: PASS" "$B/tb_$3.log"
     }

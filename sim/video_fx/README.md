@@ -21,5 +21,5 @@ is up to date); the model computes the tables itself.
 `prep.sh` needs python3 and git (vectors from the model, the baseline scalers
 from `$BASE`, the last commit without `video_fx`, and `$FXBASE`, the last without smoothing). The simulator image used on
 arm64 (`tangcore-iv:1`) has neither: run `sh prep.sh` on the host, then
-`docker run --rm --user $(id -u):$(id -g) -v $PWD/../..:/w -w /w/sim/video_fx tangcore-iv:1 sh run.sh`
+`simrun --user $(id -u):$(id -g) -v $PWD/../..:/w -w /w/sim/video_fx tangcore-iv:1 sh run.sh`
 and `python3 -I model.py check nes_fx.log` on the host.
