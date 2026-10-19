@@ -27,14 +27,14 @@ $DOCKER_RUN --user "$(id -u):$(id -g)" $CCACHE_OFF \
     verilator/verilator:latest \
     --cc --exe --build -j "${JOBS:-$(nproc)}" --top-module nestang_top --public-flat-rw \
     -Wno-fatal -Wno-WIDTHEXPAND -Wno-CASEOVERLAP -Mdir obj -o gamesave \
-    -I$D -CFLAGS -O2 \
+    -I$D -I$D/variant/standard -CFLAGS -O2 \
     $D/verilator/config.sv $D/verilator/sdram_sim.v $D/apu.v $D/cart.sv $D/compat.v $D/dpram.v \
     $D/EEPROM_24C0x.sv $D/nestang_top.sv $D/nes.v $D/ppu.v \
     $D/t65/T65_Pack.v $D/t65/T65_ALU.v $D/t65/T65_MCode.v $D/t65/T65.v \
     $D/game_loader.v /gs/game_data_sim.v \
     /out/generic_sim.sv $D/mappers/iir_filter.v $D/mappers/JYCompany.sv $D/mappers/misc.sv \
     $D/mappers/MMC1.sv $D/mappers/MMC2.sv $D/mappers/MMC3.sv $D/mappers/MMC5.sv $D/mappers/Namco.sv \
-    $D/mappers/Sachen.sv $D/mappers/Sunsoft.sv /gs/main.cpp > "$here/build/verilate.log" 2>&1 \
+    $D/mappers/Sachen.sv $D/mappers/Sunsoft.sv $D/mappers/VRC.sv $D/verilator/eseopll_stub.v /gs/main.cpp > "$here/build/verilate.log" 2>&1 \
     || { tail -40 "$here/build/verilate.log"; exit 1; }
     $DOCKER_RUN --user "$(id -u):$(id -g)" -v "$here/build:/out" -w /out --entrypoint /out/obj/gamesave \
     verilator/verilator:latest +rom=/out/game.hex +size=$size
