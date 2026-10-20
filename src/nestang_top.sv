@@ -128,7 +128,7 @@ wire pause = core_config[17]; // freeze the machine while the game menu is open
 wire frame_halt;              // from nes2hdmi: frame-lock halt, ORed with pause
 `ifdef HZ120
 wire video_std_timing = 1'b0; // 0: native NES rate x2 HDMI (855-pixel lines); 1: standard 120 Hz, for displays that refuse it
-wire [1:0] bfi_mode = video_config[21:20];   // 0 off, 1 black, 2 dim, 3 rolling; firmware Video menu (0x13)
+wire [1:0] bfi_mode = video_config[21:20];   // 0 off, 1 black, 2 bright, 3 beam; firmware Video menu (0x13)
 `else
 wire video_std_timing = 1'b0; // 0: native NES-rate HDMI (1647-pixel lines); 1: standard 60 Hz, for displays that refuse it
 `endif

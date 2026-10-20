@@ -15,7 +15,7 @@
 # hz120 run covers only console138k (the 855-pixel line is too fast for the
 # 60K NES clock to lock) and exercises every BFI mode
 # (video_config[21:20]): mode 1 in run-in/pause/reset, mode 0 in the first
-# 200-frame run, mode 2 in the second, mode 3 (rolling) in the final
+# 200-frame run, mode 2 (bright) in the second, mode 3 (beam) in the final
 # 150-frame run.
 #
 # Afterwards (host): python3 sim/framelock/check_audio.py \
@@ -56,6 +56,8 @@ run_variant() {
     # Regenerated every run, so it cannot go stale; the greps fail the run if
     # the extraction misses.
     mkdir -p "$B"
+    cp bfi_lottes.hex "$B/bfi_lottes.hex"      # modes 2/3 expected-value table for the harness
+    python3 ../../tools/bfi_lottes.py --hex | cmp -s "$B/bfi_lottes.hex" - || { echo "bfi_lottes.hex is stale: regenerate with tools/bfi_lottes.py --hex"; exit 1; }
     awk '/^module ClockGen/,/^endmodule/' $RTL/ppu.v > "$B/clockgen_sim.v"
     grep -q '^module ClockGen' "$B/clockgen_sim.v"
     grep -q 'even_frame_toggle' "$B/clockgen_sim.v"
