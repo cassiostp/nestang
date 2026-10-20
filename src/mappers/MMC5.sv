@@ -472,7 +472,8 @@ APU mmc5apu(
 	.DmaData        (0),
 	.odd_or_even    (odd_or_even),
 	.IRQ            (apu_irq),
-	.cold_reset(), .allow_us(), .PAL()
+	.cold_reset(), .allow_us(), .PAL(),
+	.ss_a(10'd0), .ss_din(8'd0), .ss_we(1'b0), .ss_dout()  // MMC5 not savestate-supported in v1
 );
 
 endmodule

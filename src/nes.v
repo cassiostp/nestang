@@ -18,7 +18,9 @@
 // https://forums.nesdev.com/viewtopic.php?f=3&t=6100
 // https://forums.nesdev.com/viewtopic.php?f=3&t=14120
 
-module DmaController(
+module DmaController #(
+	parameter [9:0] SS_BASE = 10'h040
+) (
 	input clk,
 	input ce,
 	input reset,
@@ -34,8 +36,19 @@ module DmaController(
 	output read,                   // 1 = read, 0 = write
 	output [7:0] data_to_ram,      // Value to write to RAM
 	output dmc_ack,                // ACK the DMC DMA
-	output pause_cpu               // CPU is pausede
+	output pause_cpu,              // CPU is pausede
+	input [9:0] ss_a,
+	input [7:0] ss_din,
+	input ss_we,
+	output [7:0] ss_dout
 );
+
+wire [9:0] ss_off = ss_a - SS_BASE;
+assign ss_dout =
+    (ss_off == 10'd0) ? {5'b0, dmc_state, spr_state} :
+    (ss_off == 10'd1) ? sprite_dma_lastval :
+    (ss_off == 10'd2) ? sprite_dma_addr[7:0] :
+    (ss_off == 10'd3) ? sprite_dma_addr[15:8] : 8'h00;
 
 // XXX: OAM DMA appears to be 1 cycle too short
 reg dmc_state;
@@ -49,6 +62,14 @@ always @(posedge clk) if (reset) begin
 	spr_state <= 0;
 	sprite_dma_lastval <= 0;
 	sprite_dma_addr <= 0;
+end else if (ss_we) begin
+	case (ss_off)
+	10'd0: {dmc_state, spr_state} <= ss_din[2:0];
+	10'd1: sprite_dma_lastval <= ss_din;
+	10'd2: sprite_dma_addr[7:0] <= ss_din;
+	10'd3: sprite_dma_addr[15:8] <= ss_din;
+	default: ;
+	endcase
 end else if (ce) begin
 	if (dmc_state == 0 && dmc_trigger && cpu_read && !odd_cycle) dmc_state <= 1;
 	if (dmc_state == 1 && !odd_cycle) dmc_state <= 0;
@@ -119,8 +140,24 @@ module NES(
 	output        gg_avail,
 	input         gg_reset,
 	output  [2:0] emphasis,
-	output        save_written
+	output        save_written,
+	// Save-state (see src/savestate.v)
+	input  [9:0]  ss_a,
+	input  [7:0]  ss_din,
+	input         ss_we,
+	output [7:0]  ss_dout,
+	output        ss_point,       // clean capture point (vblank, opcode fetch, DMA idle)
+	output        ss_supported    // active mapper supports savestates
 );
+
+wire [7:0] ss_cpu_dout, ss_dma_dout, ss_ppu_dout, ss_apu_dout, ss_cart_dout;
+wire [9:0] ss_off40 = ss_a - 10'h040;
+assign ss_dout = ss_cpu_dout | ss_dma_dout | ss_ppu_dout | ss_apu_dout | ss_cart_dout |
+    ((ss_off40 == 10'd4) ? {div_ppu, div_cpu} :
+     (ss_off40 == 10'd5) ? {last_sys_type, cpu_tick_count, ppu_tick, odd_or_even} :
+     (ss_off40 == 10'd6) ? {freeze_clocks, 2'b0, faux_pixel_cnt} :
+     (ss_off40 == 10'd7) ? {3'b0, joy_out, div_sys} :
+     (ss_off40 == 10'd8) ? open_bus_data : 8'h00);
 
 
 /**********************************************************/
@@ -252,6 +289,16 @@ always @(posedge clk) begin
 		div_sys <= 0;
 		cpu_tick_count <= 0;
 	end
+
+	if (ss_we) begin
+		case (ss_off40)
+		10'd4: {div_ppu, div_cpu} <= ss_din;
+		10'd5: {last_sys_type, cpu_tick_count, ppu_tick, odd_or_even} <= ss_din;
+		10'd6: {freeze_clocks, faux_pixel_cnt} <= {ss_din[7], ss_din[4:0]};
+		10'd7: div_sys <= ss_din[1:0];
+		default: ;
+		endcase
+	end
 end
 
 
@@ -270,6 +317,7 @@ wire apu_irq;
 // limited CPU model, NMI is only latched on the falling edge
 // of M2, which corresponds with CPU ce, so no latches needed.
 
+wire cpu_sync;
 T65 cpu(
 	.Mode   (0),
 	.BCD_en (0),
@@ -284,14 +332,16 @@ T65 cpu(
 	.NMI_n  (~nmi),
 	.SO_n   (1'b1),
 	.R_W_n  (cpu_rnw),
-	.Sync(), .EF(), .MF(), .XF(), .ML_n(), .VP_n(), .VDA(), .VPA(),
+	.Sync(cpu_sync), .EF(), .MF(), .XF(), .ML_n(), .VP_n(), .VDA(), .VPA(),
 
 	.A      (cpu_addr),
 	.DI     (cpu_rnw ? from_data_bus : cpu_dout),
 	.DO     (cpu_dout),
 
-	.Regs(), .DEBUG(), .NMI_ack()
+	.Regs(), .DEBUG(), .NMI_ack(),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_cpu_dout)
 );
+assign ss_point = (scanline >= 9'd241) & cpu_sync & ~pause_cpu & ~apu_dma_request;
 
 wire [15:0] dma_aout;
 wire dma_aout_enable;
@@ -322,7 +372,8 @@ DmaController dma(
 	.read           (dma_read),
 	.data_to_ram    (dma_data_to_ram),
 	.dmc_ack        (apu_dma_ack),
-	.pause_cpu      (pause_cpu)
+	.pause_cpu      (pause_cpu),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_dma_dout)
 );
 
 
@@ -355,7 +406,8 @@ APU apu(
 	.DmaData        (from_data_bus),
 	.odd_or_even    (odd_or_even),
 	.IRQ            (apu_irq),
-	.allow_us(1'b0)
+	.allow_us(1'b0),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_apu_dout)
 );
 
 assign sample = sample_a;
@@ -380,7 +432,9 @@ wire [15:0] audio_mappers = (audio_en == 2'd1) ? 16'd0 : sample_inverted;
 
 reg [2:0] joy_out;
 always @(posedge clk) begin
-	if (joypad1_cs && mw_int)
+	if (ss_we && ss_off40 == 10'd7)
+		joy_out <= ss_din[4:2];
+	else if (joypad1_cs && mw_int)
 		joy_out <= cpu_dout[2:0];
 end
 
@@ -433,7 +487,8 @@ PPU ppu(
 	.cycle            (ppu_cycle),
 	.mapper_ppu_flags (mapper_ppu_flags),
 	.emphasis         (emphasis),
-	.short_frame      (skip_pixel)
+	.short_frame      (skip_pixel),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_ppu_dout)
 );
 
 
@@ -500,7 +555,9 @@ cart_top multi_mapper (
 	.fds_eject         (fds_eject),               // Used to trigger FDS disk changes
 	.fds_busy          (fds_busy),                // Used to trigger FDS disk changes
 	.diskside_auto     (diskside_req),
-	.diskside          (diskside)
+	.diskside          (diskside),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_cart_dout),
+	.has_savestate     (ss_supported)
 );
 
 wire genie_ovr;
@@ -537,7 +594,10 @@ assign ppumem_dout  = chr_from_ppu;
 reg [7:0] open_bus_data;
 
 always @(posedge clk) begin
-	open_bus_data <= from_data_bus;
+	if (ss_we && ss_off40 == 10'd8)
+		open_bus_data <= ss_din;
+	else if (!pause)
+		open_bus_data <= from_data_bus;
 end
 
 assign from_data_bus = genie_ovr ? genie_data : raw_data_bus;

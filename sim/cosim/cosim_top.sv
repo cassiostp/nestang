@@ -110,13 +110,68 @@ always @(posedge clk) begin
 end
 
 assign tx_pending = (sys.send_state != 4'd0) || (sys.response_req != sys.response_ack) ||
-                    (sys.sv_rd_req != sys.sv_rd_ack) || sys.sv_notify;
+                    (sys.sv_rd_req != sys.sv_rd_ack) || sys.sv_notify ||
+                    (sys.ss_rd_req != sys.ss_rd_ack) || (sys.ss_st_req != sys.ss_st_ack);
+
+// ---- save-state engine (real src/savestate.v) over a pattern register file ----
+// The NES registers it snapshots do not exist here; a 1 KB RAM stands in
+// for them (pattern-filled on programming, overwritten by loads), while
+// the bulk sections go through the real SDRAM save port exactly as on
+// hardware. mapper_flags describes an MMC1 battery game with 8 KB
+// CHR RAM, so the image is 22016 bytes, like the firmware host fake.
+wire [9:0] ss_a;
+wire [7:0] ss_din_engine, ss_dout_regs;
+wire ss_we_engine;
+wire ss_freeze, ss_reset_unused, ss_loaded, ss_active, ss_edge_reset;
+wire ss_sd_ld_we;
+wire [7:0] ss_sd_ld_douta, ss_sd_ld_doutb;
+wire [21:0] ss_mem_addr;
+wire [7:0] ss_mem_din;
+wire ss_mem_we, ss_mem_req;
+wire [2:0] ss_op;
+wire ss_op_stb;
+wire [127:0] ss_status;
+wire [19:0] ss_img_raddr, ss_img_waddr;
+wire ss_img_rd_stb, ss_img_taken, ss_img_abort, ss_img_rdy, ss_img_wr_stb;
+wire [7:0] ss_img_q, ss_img_wdin;
+
+reg [7:0] ss_regs[1024];
+integer ss_i;
+always @(posedge clk) begin
+    if (!resetn) begin
+        for (ss_i = 0; ss_i < 1024; ss_i = ss_i + 1)
+            ss_regs[ss_i] <= (ss_i * 31 + 7) % 256;
+    end else if (ss_we_engine) begin
+        ss_regs[ss_a] <= ss_din_engine;
+    end
+end
+assign ss_dout_regs = ss_regs[ss_a];
+
+savestate ss_engine (
+    .clk(clk), .clkref(clkref), .resetn(resetn),
+    .mapper_flags(64'h0000_0038_0000_8401),   // mapper 1, battery, CHR RAM 8K
+    .ss_supported(1'b1), .ss_point(1'b1),
+    .ss_freeze(ss_freeze), .ss_reset(ss_reset_unused), .ss_loaded(ss_loaded),
+    .ss_edge_reset(ss_edge_reset),
+    .ss_active(ss_active),
+    .ss_a(ss_a), .ss_din(ss_din_engine), .ss_we(ss_we_engine), .ss_dout(ss_dout_regs),
+    .sd_douta(doutA), .sd_doutb(doutB),
+    .sd_ld_we(ss_sd_ld_we), .sd_ld_douta(ss_sd_ld_douta), .sd_ld_doutb(ss_sd_ld_doutb),
+    .mem_addr(ss_mem_addr), .mem_din(ss_mem_din), .mem_we(ss_mem_we),
+    .mem_req(ss_mem_req), .mem_ack(sv_ack), .mem_q(sv_q),
+    .op(ss_op), .op_stb(ss_op_stb), .ss_status(ss_status),
+    .img_raddr(ss_img_raddr), .img_rd_stb(ss_img_rd_stb),
+    .img_taken(ss_img_taken), .img_abort(ss_img_abort),
+    .img_rdy(ss_img_rdy), .img_q(ss_img_q),
+    .img_waddr(ss_img_waddr), .img_wdin(ss_img_wdin), .img_wr_stb(ss_img_wr_stb)
+);
 
 iosys_bl616_cosim #(
     .FREQ(21_492_000),
     .SAVE_IF(1),
     .SAVE_AW(13),
-    .SAVE_SYNC(0)
+    .SAVE_SYNC(0),
+    .SS_IF(1)
 ) sys (
     .clk(clk),
     .hclk(hclk),
@@ -150,9 +205,15 @@ iosys_bl616_cosim #(
     .sv_din(sv_din),
     .sv_we(sv_we),
     .sv_q(sv_q),
-    .sv_core_we(sv_core_we),
+    .sv_core_we(sv_core_we | ss_loaded),
     .sv_req(sv_req),
     .sv_ack(sv_ack),
+
+    .ss_op(ss_op), .ss_op_stb(ss_op_stb), .ss_status(ss_status),
+    .ss_img_raddr(ss_img_raddr), .ss_img_rd_stb(ss_img_rd_stb),
+    .ss_img_taken(ss_img_taken), .ss_img_abort(ss_img_abort),
+    .ss_img_rdy(ss_img_rdy), .ss_img_q(ss_img_q),
+    .ss_img_waddr(ss_img_waddr), .ss_img_wdin(ss_img_wdin), .ss_img_wr_stb(ss_img_wr_stb),
 
     .core_config(core_config),
     .video_config(video_config),
@@ -203,12 +264,14 @@ sdram_nes sdram (
     .rv_req(1'b0),
     .rv_req_ack(),
     .rv_we(1'b0),
-    .sv_addr({9'b11_1100_000, sv_addr}),
-    .sv_din(sv_din),
-    .sv_we(sv_we),
-    .sv_req(sv_req),
+    .sv_addr(ss_active ? ss_mem_addr : {9'b11_1100_000, sv_addr}),
+    .sv_din(ss_active ? ss_mem_din : sv_din),
+    .sv_we(ss_active ? ss_mem_we : sv_we),
+    .sv_req(ss_active ? ss_mem_req : sv_req),
     .sv_ack(sv_ack),
-    .sv_dout(sv_q)
+    .sv_dout(sv_q),
+    .ss_edge_reset(ss_edge_reset), .ss_ld_we(ss_sd_ld_we),
+    .ss_ld_douta(ss_sd_ld_douta), .ss_ld_doutb(ss_sd_ld_doutb)
 );
 
 sdram_chip chip (
@@ -251,7 +314,7 @@ always @(posedge clk) begin
         tc <= 0;
         churn_div <= 0;
         lfsr <= 16'hACE1;
-    end else begin
+    end else if (!ss_freeze) begin     // the "game" halts for savestates, as on hardware
         tc <= tc + 1;
         lfsr <= lfsr_next(lfsr);
         sv_core_we <= 0;

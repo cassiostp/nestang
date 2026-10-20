@@ -53,7 +53,13 @@ module sdram_nes
     input             sv_we,
     input             sv_req,
     output reg        sv_ack,
-    output reg  [7:0] sv_dout
+    output reg  [7:0] sv_dout,
+
+    // Save-state load (see sdram_nes.v): re-arm the request edge detectors.
+    input             ss_edge_reset,
+    input             ss_ld_we,
+    input       [7:0] ss_ld_douta,
+    input       [7:0] ss_ld_doutb
 );
 
 assign busy = 0;
@@ -101,6 +107,11 @@ always @(posedge clk) begin
         port[1] <= 0;
         sv_ack <= 0;
     end else begin
+
+        if (ss_edge_reset) begin
+            oeA_d <= 0; weA_d <= 0;
+            oeB_d <= 0; weB_d <= 0;
+        end
 
         // RAS
         if (cycle == 1'b1) begin
@@ -160,6 +171,10 @@ always @(posedge clk) begin
                 sv_ack  <= ~sv_ack;     // toggle: one ack per transaction
             end
             port[0] <= PORT_NONE;
+            if (ss_ld_we) begin
+                doutA <= ss_ld_douta;
+                doutB <= ss_ld_doutb;
+            end
         end
         
         if (cycle == 1'b1) begin

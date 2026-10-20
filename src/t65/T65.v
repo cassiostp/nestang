@@ -157,7 +157,13 @@ module T65(
     output [63:0] Regs,
     // DEBUG
     T_t65_dbg DEBUG,
-    output NMI_ack
+    output NMI_ack,
+    // Save-state byte bus (see src/savestate.v). Addresses 0x00-0x1F of the
+    // register image; writes only happen while the machine is frozen.
+    input [9:0] ss_a,
+    input [7:0] ss_din,
+    input ss_we,
+    output reg [7:0] ss_dout
 );
   
 // Registers
@@ -270,6 +276,45 @@ assign DEBUG.P = P;
 
 assign Regs = {PC,S,P,Y[7:0],X[7:0],ABC[7:0]};
 
+// Save-state readback. Full internal state (not just architectural regs):
+// the microcode pipeline registers (ALU_Op_r, BusA_r, ...) carry the
+// in-flight instruction, so capture is exact at any frozen cycle.
+always @(*) begin
+    ss_dout = 8'h00;
+    if (ss_a[9:5] == 5'd0) begin
+        case (ss_a[4:0])
+        5'd0:  ss_dout = ABC[7:0];
+        5'd1:  ss_dout = X[7:0];
+        5'd2:  ss_dout = Y[7:0];
+        5'd3:  ss_dout = P;
+        5'd4:  ss_dout = PC[7:0];
+        5'd5:  ss_dout = PC[15:8];
+        5'd6:  ss_dout = S[7:0];
+        5'd7:  ss_dout = S[15:8];
+        5'd8:  ss_dout = IR;
+        5'd9:  ss_dout = {5'b0, MCycle};
+        5'd10: ss_dout = ABC[15:8];
+        5'd11: ss_dout = X[15:8];
+        5'd12: ss_dout = Y[15:8];
+        5'd13: ss_dout = AD;
+        5'd14: ss_dout = DL;
+        5'd15: ss_dout = BAH;
+        5'd16: ss_dout = BAL[7:0];
+        5'd17: ss_dout = {7'b0, BAL[8]};
+        5'd18: ss_dout = PBR;
+        5'd19: ss_dout = DBR;
+        5'd20: ss_dout = BusA_r;
+        5'd21: ss_dout = BusB;
+        5'd22: ss_dout = BusB_r;
+        5'd23: ss_dout = {3'b0, ALU_Op_r};
+        5'd24: ss_dout = {Mode_r, Set_Addr_To_r, Write_Data_r};
+        5'd25: ss_dout = {WRn_i, rdy_mod, RstCycle, IRQCycle, NMICycle, IRQReq, NMIReq, NMIAct};
+        5'd26: ss_dout = {BCD_en_r, EF_i, MF_i, XF_i, SO_n_o, IRQ_n_o, NMI_n_o, NMI_entered};
+        default: ss_dout = 8'h00;
+        endcase
+    end
+end
+
 T65_MCode mcode(
     //inputs
     .Mode(Mode_r),
@@ -352,6 +397,25 @@ always @(posedge Clk) begin
 
         NMICycle <= 0;
         IRQCycle <= 0;
+    end else if (ss_we && ss_a[9:5] == 5'd0) begin
+        case (ss_a[4:0])
+        5'd4:  PC[7:0] <= ss_din;
+        5'd5:  PC[15:8] <= ss_din;
+        5'd6:  S[7:0] <= ss_din;
+        5'd7:  S[15:8] <= ss_din;
+        5'd8:  IR <= ss_din;
+        5'd18: PBR <= ss_din;
+        5'd19: DBR <= ss_din;
+        5'd23: ALU_Op_r <= T_ALU_OP'(ss_din[4:0]);
+        5'd24: begin
+            Mode_r <= ss_din[7:6];
+            Set_Addr_To_r <= T_Set_Addr_To'(ss_din[5:4]);
+            Write_Data_r <= T_Write_Data'(ss_din[3:0]);
+        end
+        5'd25: {WRn_i, rdy_mod, IRQCycle, NMICycle} <= {ss_din[7:6], ss_din[4:3]};
+        5'd26: {BCD_en_r, EF_i, MF_i, XF_i} <= ss_din[7:4];
+        default: ;
+        endcase
     end else if (Enable) begin
         // some instructions behavior changed by the Rdy line. Detect this at the correct cycles.
         if (MCycle == 3'b000) 
@@ -435,7 +499,18 @@ always @(posedge Clk) begin
     reg [7:0] tmpP;     //Lets try to handle loading P at mcycle=0 and set/clk flags at same cycle
 
     if (~Res_n_i) begin
-        P <= 0;         // ensure we have nothing set on reset      
+        P <= 0;         // ensure we have nothing set on reset
+    end else if (ss_we && ss_a[9:5] == 5'd0) begin
+        case (ss_a[4:0])
+        5'd0:  ABC[7:0] <= ss_din;
+        5'd1:  X[7:0] <= ss_din;
+        5'd2:  Y[7:0] <= ss_din;
+        5'd3:  P <= ss_din;
+        5'd10: ABC[15:8] <= ss_din;
+        5'd11: X[15:8] <= ss_din;
+        5'd12: Y[15:8] <= ss_din;
+        default: ;
+        endcase
     end else if (Enable) begin
         tmpP = P;
         if (really_rdy) begin
@@ -508,6 +583,19 @@ always @(posedge Clk) begin
         BAL <= 0;
         BAH <= 0;
         DL <= 0;
+    end else if (ss_we && ss_a[9:5] == 5'd0) begin
+        case (ss_a[4:0])
+        5'd13: AD <= ss_din;
+        5'd14: DL <= ss_din;
+        5'd15: BAH <= ss_din;
+        5'd16: BAL[7:0] <= ss_din;
+        5'd17: BAL[8] <= ss_din[0];
+        5'd20: BusA_r <= ss_din;
+        5'd21: BusB <= ss_din;
+        5'd22: BusB_r <= ss_din;
+        5'd26: NMI_entered <= ss_din[0];
+        default: ;
+        endcase
     end else if (Enable) begin
         if (really_rdy) begin
             NMI_entered <= 1'b0;
@@ -642,6 +730,13 @@ always @(posedge Clk) begin
         NMIAct <= 0;
         IRQReq <= 0;
         NMIReq <= 0;
+    end else if (ss_we && ss_a[9:5] == 5'd0) begin
+        case (ss_a[4:0])
+        5'd9:  MCycle <= ss_din[2:0];
+        5'd25: {RstCycle, IRQReq, NMIReq, NMIAct} <= {ss_din[5], ss_din[2:0]};
+        5'd26: {IRQ_n_o, NMI_n_o} <= ss_din[2:1];
+        default: ;
+        endcase
     end else if (Enable) begin
         if (really_rdy) begin
             if (MCycle == LCycle || Break) begin

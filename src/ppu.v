@@ -4,7 +4,9 @@
 // altera message_off 10935
 
 // Module handles updating the loopy scroll register
-module LoopyGen (
+module LoopyGen #(
+    parameter [9:0] SS_BASE = 10'h050
+) (
     input clk,
     input ce,
     input is_rendering,
@@ -15,8 +17,20 @@ module LoopyGen (
     input is_pre_render, // Is this the pre-render scanline
     input [8:0] cycle,
     output [14:0] loopy,
-    output [2:0] fine_x_scroll  // Current loopy value
+    output [2:0] fine_x_scroll,  // Current loopy value
+    input [9:0] ss_a,
+    input [7:0] ss_din,
+    input ss_we,
+    output [7:0] ss_dout
 );
+
+wire [9:0] ss_off = ss_a - SS_BASE;
+assign ss_dout =
+    (ss_off == 10'd0) ? loopy_v[7:0] :
+    (ss_off == 10'd1) ? {1'b0, loopy_v[14:8]} :
+    (ss_off == 10'd2) ? loopy_t[7:0] :
+    (ss_off == 10'd3) ? {1'b0, loopy_t[14:8]} :
+    (ss_off == 10'd4) ? {ppu_incr, ppu_address_latch, 3'b0, loopy_x} : 8'h00;
 
 // Controls how much to increment on each write
 reg ppu_incr; // 0 = 1, 1 = 32
@@ -38,7 +52,16 @@ initial begin
 end
 
 // Handle updating loopy_t and loopy_v
-always @(posedge clk) if (ce) begin
+always @(posedge clk) if (ss_we) begin
+    case (ss_off)
+    10'd0: loopy_v[7:0] <= ss_din;
+    10'd1: loopy_v[14:8] <= ss_din[6:0];
+    10'd2: loopy_t[7:0] <= ss_din;
+    10'd3: loopy_t[14:8] <= ss_din[6:0];
+    10'd4: {ppu_incr, ppu_address_latch, loopy_x} <= {ss_din[7:6], ss_din[2:0]};
+    default: ;
+    endcase
+end else if (ce) begin
     if (is_rendering) begin
         // Increment course X scroll right after attribute table byte was fetched.
         if (cycle[2:0] == 3 && (cycle < 256 || cycle >= 320 && cycle < 336)) begin
@@ -107,7 +130,9 @@ endmodule
 
 
 // Generates the current scanline / cycle counters
-module ClockGen(
+module ClockGen #(
+    parameter [9:0] SS_BASE = 10'h058
+) (
     input clk,
     input ce,
     input reset,
@@ -122,8 +147,19 @@ module ClockGen(
     output entering_vblank,
     output reg is_pre_render,
     output short_frame,
-    output is_vbe_sl
+    output is_vbe_sl,
+    input [9:0] ss_a,
+    input [7:0] ss_din,
+    input ss_we,
+    output [7:0] ss_dout
 );
+
+wire [9:0] ss_off = ss_a - SS_BASE;
+assign ss_dout =
+    (ss_off == 10'd0) ? scanline[7:0] :
+    (ss_off == 10'd1) ? {7'b0, scanline[8]} :
+    (ss_off == 10'd2) ? cycle[7:0] :
+    (ss_off == 10'd3) ? {4'b0, cycle[8], is_in_vblank, is_pre_render, even_frame_toggle} : 8'h00;
 
 reg even_frame_toggle = 0;
 
@@ -177,6 +213,12 @@ wire new_is_in_vblank = entering_vblank ? 1'b1 : exiting_vblank ? 1'b0 : is_in_v
 always @(posedge clk) if (reset) begin
     cycle <= 0;
     is_in_vblank <= 0;
+end else if (ss_we) begin
+    case (ss_off)
+    10'd2: cycle[7:0] <= ss_din;
+    10'd3: {cycle[8], is_in_vblank} <= ss_din[3:2];
+    default: ;
+    endcase
 end else if (ce) begin
     cycle <= end_of_line ? 1'd0 : cycle + 1'd1;
     is_in_vblank <= new_is_in_vblank;
@@ -186,6 +228,13 @@ always @(posedge clk) if (reset) begin
     scanline <= 0;
     is_pre_render <= 0;
     even_frame_toggle <= 0; // Resets to 0, the first frame will always end with 341 pixels.
+end else if (ss_we) begin
+    case (ss_off)
+    10'd0: scanline[7:0] <= ss_din;
+    10'd1: scanline[8] <= ss_din[0];
+    10'd3: {is_pre_render, even_frame_toggle} <= ss_din[1:0];
+    default: ;
+    endcase
 end else if (ce && end_of_line) begin
     // Once the scanline counter reaches end of 260, it gets reset to -1.
     scanline <= (scanline == vblank_end_sl) ? 9'b111111111 : scanline + 1'd1;
@@ -200,15 +249,28 @@ end
 endmodule // ClockGen
 
 // 8 of these exist, they are used to output sprites.
-module Sprite(
+module Sprite #(
+    parameter [9:0] SS_BASE = 10'h3F0
+) (
     input clk,
     input ce,
     input enable,
     input [3:0] load,
     input [26:0] load_in,
     output [26:0] load_out,
-    output [4:0] bits // Low 4 bits = pixel, high bit = prio
+    output [4:0] bits, // Low 4 bits = pixel, high bit = prio
+    input [9:0] ss_a,
+    input [7:0] ss_din,
+    input ss_we,
+    output [7:0] ss_dout
 );
+
+wire [9:0] ss_off = ss_a - SS_BASE;
+assign ss_dout =
+    (ss_off == 10'd0) ? pix1 :
+    (ss_off == 10'd1) ? pix2 :
+    (ss_off == 10'd2) ? x_coord :
+    (ss_off == 10'd3) ? {5'b0, upper_color, aprio} : 8'h00;
 
 reg [1:0] upper_color; // Upper 2 bits of color
 reg [7:0] x_coord;     // X coordinate where we want things
@@ -216,7 +278,15 @@ reg [7:0] pix1, pix2;  // Shift registers, output when x_coord == 0
 reg aprio;             // Current prio
 wire active = (x_coord == 0);
 
-always @(posedge clk) if (ce) begin
+always @(posedge clk) if (ss_we) begin
+    case (ss_off)
+    10'd0: pix1 <= ss_din;
+    10'd1: pix2 <= ss_din;
+    10'd2: x_coord <= ss_din;
+    10'd3: {upper_color, aprio} <= ss_din[2:0];
+    default: ;
+    endcase
+end else if (ce) begin
     if (enable) begin
         if (!active) begin
             // Decrease until x_coord is zero.
@@ -240,27 +310,36 @@ endmodule  // SpriteGen
 // When load is set, and clocked, load_in is loaded into sprite 7 and all others are shifted down.
 // Sprite 0 has highest prio.
 // 226 LUTs, 68 Slices
-module SpriteSet(
+module SpriteSet #(
+    parameter [9:0] SS_BASE = 10'h098
+) (
     input clk,
     input ce,              // Input clock
     input enable,          // Enable pixel generation
     input [3:0] load,      // Which parts of the state to load/shift.
     input [26:0] load_in,  // State to load with
     output [4:0] bits,     // Output bits
-    output is_sprite0      // Set to true if sprite #0 was output
+    output is_sprite0,     // Set to true if sprite #0 was output
+    input [9:0] ss_a,
+    input [7:0] ss_din,
+    input ss_we,
+    output [7:0] ss_dout
 );
+
+wire [7:0] ss_out7, ss_out6, ss_out5, ss_out4, ss_out3, ss_out2, ss_out1, ss_out0;
+assign ss_dout = ss_out0 | ss_out1 | ss_out2 | ss_out3 | ss_out4 | ss_out5 | ss_out6 | ss_out7;
 
 wire [26:0] load_out7, load_out6, load_out5, load_out4, load_out3, load_out2, load_out1, load_out0;
 wire [4:0] bits7, bits6, bits5, bits4, bits3, bits2, bits1, bits0;
 
-Sprite sprite7(clk, ce, enable, load, load_in,   load_out7, bits7);
-Sprite sprite6(clk, ce, enable, load, load_out7, load_out6, bits6);
-Sprite sprite5(clk, ce, enable, load, load_out6, load_out5, bits5);
-Sprite sprite4(clk, ce, enable, load, load_out5, load_out4, bits4);
-Sprite sprite3(clk, ce, enable, load, load_out4, load_out3, bits3);
-Sprite sprite2(clk, ce, enable, load, load_out3, load_out2, bits2);
-Sprite sprite1(clk, ce, enable, load, load_out2, load_out1, bits1);
-Sprite sprite0(clk, ce, enable, load, load_out1, load_out0, bits0);
+Sprite #(.SS_BASE(SS_BASE + 10'd28)) sprite7(clk, ce, enable, load, load_in,   load_out7, bits7, ss_a, ss_din, ss_we, ss_out7);
+Sprite #(.SS_BASE(SS_BASE + 10'd24)) sprite6(clk, ce, enable, load, load_out7, load_out6, bits6, ss_a, ss_din, ss_we, ss_out6);
+Sprite #(.SS_BASE(SS_BASE + 10'd20)) sprite5(clk, ce, enable, load, load_out6, load_out5, bits5, ss_a, ss_din, ss_we, ss_out5);
+Sprite #(.SS_BASE(SS_BASE + 10'd16)) sprite4(clk, ce, enable, load, load_out5, load_out4, bits4, ss_a, ss_din, ss_we, ss_out4);
+Sprite #(.SS_BASE(SS_BASE + 10'd12)) sprite3(clk, ce, enable, load, load_out4, load_out3, bits3, ss_a, ss_din, ss_we, ss_out3);
+Sprite #(.SS_BASE(SS_BASE + 10'd8))  sprite2(clk, ce, enable, load, load_out3, load_out2, bits2, ss_a, ss_din, ss_we, ss_out2);
+Sprite #(.SS_BASE(SS_BASE + 10'd4))  sprite1(clk, ce, enable, load, load_out2, load_out1, bits1, ss_a, ss_din, ss_we, ss_out1);
+Sprite #(.SS_BASE(SS_BASE + 10'd0))  sprite0(clk, ce, enable, load, load_out1, load_out0, bits0, ss_a, ss_din, ss_we, ss_out0);
 
 // Determine which sprite is visible on this pixel.
 assign bits =
@@ -277,7 +356,9 @@ assign is_sprite0 = bits0[1:0] != 0;
 
 endmodule  // SpriteSet
 
-module SpriteRAM(
+module SpriteRAM #(
+    parameter [9:0] SS_BASE = 10'h070
+) (
     input clk,
     input ce,
     input reset_line,          // OAM evaluator needs to be reset before processing is started.
@@ -292,8 +373,23 @@ module SpriteRAM(
     input [7:0] data_in,       // New value for oam or oam_ptr
     output reg spr_overflow,   // Set to true if we had more than 8 objects on a scan line. Reset when exiting vblank.
     output reg sprite0,        // True if sprite#0 is included on the scan line currently being painted.
-    input is_vbe               // Last line before pre-render
+    input is_vbe,              // Last line before pre-render
+    input [9:0] ss_a,
+    input [7:0] ss_din,
+    input ss_we,
+    output [7:0] ss_dout
 );
+
+// Savestate windows: scalars at SS_BASE, OAM at 0x200-0x2FF, sprtemp at
+// 0x300-0x31F (fixed image layout, see src/savestate.v).
+wire [9:0] ss_off = ss_a - SS_BASE;
+assign ss_dout =
+    (ss_a[9:8] == 2'b10) ? oam[ss_a[7:0]] :
+    (ss_a >= 10'h300 && ss_a < 10'h320) ? sprtemp[ss_a[4:0]] :
+    (ss_off == 10'd0) ? oam_ptr :
+    (ss_off == 10'd1) ? {3'b0, p, state} :
+    (ss_off == 10'd2) ? oam_data :
+    (ss_off == 10'd3) ? {4'b0, sprite0_curr, overflow, spr_overflow, sprite0} : 8'h00;
 
 reg [7:0] sprtemp[0:31];   // Sprite Temporary Memory. 32 bytes.
 reg [7:0] oam_ptr;         // Pointer into oam_ptr.
@@ -359,7 +455,21 @@ reg  [7:0] oam_dout;
 
 always @(posedge clk) oam_dout <= oam[oam_addr];
 
-always @(posedge clk) if (ce) begin
+always @(posedge clk) if (ss_we) begin
+    if (ss_a[9:8] == 2'b10)
+        oam[ss_a[7:0]] <= ss_din;
+    else if (ss_a >= 10'h300 && ss_a < 10'h320)
+        sprtemp[ss_a[4:0]] <= ss_din;
+    else begin
+        case (ss_off)
+        10'd0: oam_ptr <= ss_din;
+        10'd1: {p, state} <= ss_din[4:0];
+        10'd2: oam_data <= ss_din;
+        10'd3: {sprite0_curr, overflow, spr_overflow, sprite0} <= ss_din[3:0];
+        default: ;
+        endcase
+    end
+end else if (ce) begin
 
     // Some bits of the OAM are hardwired to zero.
     if (oam_load) begin
@@ -421,7 +531,9 @@ endmodule  // SpriteRAM
 // Generates addresses in VRAM where we'll fetch sprite graphics from,
 // and populates load, load_in so the SpriteGen can be loaded.
 // 10 LUT, 4 Slices
-module SpriteAddressGen(
+module SpriteAddressGen #(
+    parameter [9:0] SS_BASE = 10'h080
+) (
     input clk,
     input ce,
     input enabled,          // If unset, |load| will be all zeros.
@@ -432,8 +544,17 @@ module SpriteAddressGen(
     output [12:0] vram_addr,// Low bits of address in VRAM that we'd like to read.
     input [7:0] vram_data,  // Byte of VRAM in the specified address
     output [3:0] load,      // Which subset of load_in that is now valid, will be loaded into SpritesGen.
-    output [26:0] load_in   // Bits to load into SpritesGen.
+    output [26:0] load_in,  // Bits to load into SpritesGen.
+    input [9:0] ss_a,
+    input [7:0] ss_din,
+    input ss_we,
+    output [7:0] ss_dout
 );
+
+wire [9:0] ss_off = ss_a - SS_BASE;
+assign ss_dout =
+    (ss_off == 10'd0) ? temp_tile :
+    (ss_off == 10'd1) ? {flip_y, flip_x, dummy_sprite, 1'b0, temp_y} : 8'h00;
 
 reg [7:0] temp_tile;    // Holds the tile that we will get
 reg [3:0] temp_y;       // Holds the Y coord (will be swapped based on FlipY).
@@ -464,7 +585,13 @@ assign load_in = {vram_f, vram_f, temp, temp[1:0], temp[5]};
 // selected pattern.
 assign vram_addr = {obj_size ? temp_tile[0] : obj_patt,
                                         temp_tile[7:1], obj_size ? y_f[3] : temp_tile[0], cycle[1], y_f[2:0] };
-always @(posedge clk) if (ce) begin
+always @(posedge clk) if (ss_we) begin
+    case (ss_off)
+    10'd0: temp_tile <= ss_din;
+    10'd1: {flip_y, flip_x, dummy_sprite, temp_y} <= {ss_din[7:5], ss_din[3:0]};
+    default: ;
+    endcase
+end else if (ce) begin
     if (load_y) temp_y <= temp[3:0];
     if (load_tile) temp_tile <= temp;
     if (load_attr) {flip_y, flip_x, dummy_sprite} <= {temp[7:6], temp[4]};
@@ -472,7 +599,9 @@ end
 
 endmodule  // SpriteAddressGen
 
-module BgPainter(
+module BgPainter #(
+    parameter [9:0] SS_BASE = 10'h088
+) (
     input clk,
     input ce,
     input enable,             // Shift registers activated
@@ -481,8 +610,26 @@ module BgPainter(
     input [14:0] loopy,
     output [7:0] name_table,  // VRAM name table to read next.
     input [7:0] vram_data,
-    output [3:0] pixel
+    output [3:0] pixel,
+    input [9:0] ss_a,
+    input [7:0] ss_din,
+    input ss_we,
+    output [7:0] ss_dout
 );
+
+wire [9:0] ss_off = ss_a - SS_BASE;
+assign ss_dout =
+    (ss_off == 10'd0) ? playfield_pipe_1[7:0] :
+    (ss_off == 10'd1) ? playfield_pipe_1[15:8] :
+    (ss_off == 10'd2) ? playfield_pipe_2[7:0] :
+    (ss_off == 10'd3) ? playfield_pipe_2[15:8] :
+    (ss_off == 10'd4) ? playfield_pipe_3[7:0] :
+    (ss_off == 10'd5) ? {7'b0, playfield_pipe_3[8]} :
+    (ss_off == 10'd6) ? playfield_pipe_4[7:0] :
+    (ss_off == 10'd7) ? {7'b0, playfield_pipe_4[8]} :
+    (ss_off == 10'd8) ? current_name_table :
+    (ss_off == 10'd9) ? {6'b0, current_attribute_table} :
+    (ss_off == 10'd10) ? bg0 : 8'h00;
 
 reg [15:0] playfield_pipe_1;       // Name table pixel pipeline #1
 reg [15:0] playfield_pipe_2;       // Name table pixel pipeline #2
@@ -503,7 +650,22 @@ initial begin
     bg0 = 0;
 end
 
-always @(posedge clk) if (ce) begin
+always @(posedge clk) if (ss_we) begin
+    case (ss_off)
+    10'd0: playfield_pipe_1[7:0] <= ss_din;
+    10'd1: playfield_pipe_1[15:8] <= ss_din;
+    10'd2: playfield_pipe_2[7:0] <= ss_din;
+    10'd3: playfield_pipe_2[15:8] <= ss_din;
+    10'd4: playfield_pipe_3[7:0] <= ss_din;
+    10'd5: playfield_pipe_3[8] <= ss_din[0];
+    10'd6: playfield_pipe_4[7:0] <= ss_din;
+    10'd7: playfield_pipe_4[8] <= ss_din[0];
+    10'd8: current_name_table <= ss_din;
+    10'd9: current_attribute_table <= ss_din[1:0];
+    10'd10: bg0 <= ss_din;
+    default: ;
+    endcase
+end else if (ce) begin
     case (cycle[2:0])
         1: current_name_table <= vram_data;
         3: current_attribute_table <=
@@ -564,8 +726,15 @@ module PaletteRam
     input [4:0] addr,
     input [5:0] din,
     output [5:0] dout,
-    input write
+    input write,
+    input [9:0] ss_a,
+    input [7:0] ss_din,
+    input ss_we,
+    output [7:0] ss_dout
 );
+
+// Savestate window 0x320-0x33F: raw palette entries (no addr mirroring).
+assign ss_dout = (ss_a >= 10'h320 && ss_a < 10'h340) ? {2'b0, palette[ss_a[4:0]]} : 8'h00;
 
 reg [5:0] palette [32] = '{
     'h0F,'h2C,'h10,'h1C,
@@ -585,8 +754,11 @@ reg [5:0] palette [32] = '{
 wire [4:0] addr2 = (addr[1:0] == 0) ? {1'b0, addr[3:0]} : addr;
 assign dout = palette[addr2];
 
-always @(posedge clk) if (ce && write) begin
-    palette[addr2] <= din;
+always @(posedge clk) begin
+    if (ss_we && ss_a >= 10'h320 && ss_a < 10'h340)
+        palette[ss_a[4:0]] <= ss_din[5:0];
+    else if (ce && write)
+        palette[addr2] <= din;
 end
 
 endmodule  // PaletteRam
@@ -612,8 +784,15 @@ module PPU(
     output  [8:0] cycle,
     output [19:0] mapper_ppu_flags,
     output reg [2:0] emphasis,
-    output       short_frame
+    output       short_frame,
+    input [9:0] ss_a,
+    input [7:0] ss_din,
+    input ss_we,
+    output [7:0] ss_dout
 );
+
+wire [7:0] ss_clk_dout, ss_loopy_dout, ss_bg_dout, ss_sram_dout, ss_sagen_dout, ss_sset_dout, ss_pal_dout;
+wire [9:0] ss_off = ss_a - 10'h060;
 
 // These are stored in control register 0
 reg obj_patt; // Object pattern table
@@ -673,7 +852,8 @@ ClockGen clock(
     .entering_vblank     (entering_vblank),
     .is_pre_render       (is_pre_render_line),
     .short_frame         (short_frame),
-    .is_vbe_sl           (is_vbe_sl)
+    .is_vbe_sl           (is_vbe_sl),
+    .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_clk_dout)
 );
 
 // The loopy module handles updating of the loopy address
@@ -691,7 +871,8 @@ LoopyGen loopy0(
     .is_pre_render (is_pre_render_line),
     .cycle         (cycle),
     .loopy         (loopy),
-    .fine_x_scroll (fine_x_scroll)
+    .fine_x_scroll (fine_x_scroll),
+    .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_loopy_dout)
 );
 
 // Set to true if the current ppu_addr pointer points into palette ram.
@@ -710,7 +891,8 @@ BgPainter bg_painter(
     .loopy         (loopy),
     .name_table    (bg_name_table),
     .vram_data     (vram_din),
-    .pixel         (bg_pixel_noblank)
+    .pixel         (bg_pixel_noblank),
+    .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_bg_dout)
 );
 
 // Blank out BG in the leftmost 8 pixels?
@@ -747,7 +929,8 @@ SpriteRAM sprite_ram(
     .data_in         (din),
     .spr_overflow    (sprite_overflow),
     .sprite0         (obj0_on_line),
-    .is_vbe          (is_vbe_sl)
+    .is_vbe          (is_vbe_sl),
+    .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_sram_dout)
 );
 
 wire [4:0] obj_pixel_noblank;
@@ -769,7 +952,8 @@ SpriteAddressGen address_gen(
     .vram_addr (sprite_vram_addr),       // [out] VRAM Address that we want data from
     .vram_data (vram_din),               // [in] Data at the specified address
     .load      (spriteset_load),
-    .load_in   (spriteset_load_in)       // Which parts of SpriteGen to load
+    .load_in   (spriteset_load_in),       // Which parts of SpriteGen to load
+    .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_sagen_dout)
 );
 
 // Between 0..255 (256 cycles), draws pixels.
@@ -781,7 +965,8 @@ SpriteSet sprite_gen(
     .load       (spriteset_load),
     .load_in    (spriteset_load_in),
     .bits       (obj_pixel_noblank),
-    .is_sprite0 (is_obj0_pixel)
+    .is_sprite0 (is_obj0_pixel),
+    .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_sset_dout)
 );
 
 // Blank out obj in the leftmost 8 pixels?
@@ -789,7 +974,10 @@ wire show_obj_on_pixel = (object_clip || (cycle[7:3] != 0)) && enable_objects;
 wire [4:0] obj_pixel = {obj_pixel_noblank[4:2], show_obj_on_pixel ? obj_pixel_noblank[1:0] : 2'b00};
 
 reg sprite0_hit_bg;            // True if sprite#0 has collided with the BG in the last frame.
-always @(posedge clk) if (ce) begin
+always @(posedge clk) if (ss_we) begin
+    if (ss_off == 10'd1)
+        {rendering_enabled, sprite0_hit_bg} <= ss_din[3:2];
+end else if (ce) begin
     rendering_enabled <= (enable_objects | enable_playfield);
     if (cycle == 340 && is_vbe_sl) // confirmed with visual 2C02 (261, 1);
         sprite0_hit_bg <= 0;
@@ -845,7 +1033,8 @@ PaletteRam palette_ram(
     .addr  (pram_addr), // Read addr
     .din   (din[5:0]),  // Value to write
     .dout  (color2),    // Output color
-    .write (write && (ain == 7) && is_pal_address) // Condition for writing
+    .write (write && (ain == 7) && is_pal_address), // Condition for writing
+    .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_pal_dout)
 );
 
 // PAL/Dendy masks scanline 0 and 2 pixels on each side with black.
@@ -856,8 +1045,14 @@ reg enable_playfield, enable_objects;
 wire clear_nmi = (exiting_vblank | (read && ain == 2));
 wire set_nmi = entering_vblank & ~clear_nmi;
 
-always @(posedge clk)
-if (ce) begin
+always @(posedge clk) begin
+if (ss_we) begin
+    case (ss_off)
+    10'd0: {vbl_enable, obj_size, bg_patt, obj_patt, grayscale, playfield_clip, object_clip, enable_playfield} <= ss_din;
+    10'd1: {enable_objects, emphasis, nmi_occured} <= {ss_din[7:4], ss_din[1]};
+    default: ;
+    endcase
+end else if (ce) begin
     if (reset) begin
         {obj_patt, bg_patt, obj_size, vbl_enable} <= 0; // 2000 resets to 0
         {grayscale, playfield_clip, object_clip, enable_playfield, enable_objects, emphasis} <= 0; // 2001 resets to 0
@@ -887,6 +1082,7 @@ if (ce) begin
     if (clear_nmi)
         nmi_occured <= 0;
 end
+end
 
 // If we're triggering a VBLANK NMI
 assign nmi = nmi_occured && vbl_enable;
@@ -894,7 +1090,13 @@ assign nmi = nmi_occured && vbl_enable;
 // One cycle after vram_r was asserted, the value
 // is available on the bus.
 reg vram_read_delayed;
-always @(posedge clk) if (ce) begin
+always @(posedge clk) if (ss_we) begin
+    case (ss_off)
+    10'd1: vram_read_delayed <= ss_din[0];
+    10'd2: vram_latch <= ss_din;
+    default: ;
+    endcase
+end else if (ce) begin
     if (vram_read_delayed)
         vram_latch <= vram_din;
     vram_read_delayed <= vram_r_ppudata;
@@ -969,10 +1171,37 @@ always @(posedge clk) begin
             latched_dout <= din;
         end
     end
+
+    if (ss_we) begin
+        case (ss_off)
+        10'd3: latched_dout <= ss_din;
+        10'd4: decay_high[7:0] <= ss_din;
+        10'd5: decay_high[15:8] <= ss_din;
+        10'd6: decay_high[23:16] <= ss_din;
+        10'd7: decay_low[7:0] <= ss_din;
+        10'd8: decay_low[15:8] <= ss_din;
+        10'd9: decay_low[23:16] <= ss_din;
+        10'd10: {refresh_high, refresh_low} <= ss_din[1:0];
+        default: ;
+        endcase
+    end
 end
 
 assign dout = latched_dout;
 
+
+assign ss_dout = ss_clk_dout | ss_loopy_dout | ss_bg_dout | ss_sram_dout | ss_sagen_dout | ss_sset_dout | ss_pal_dout |
+    ((ss_off == 10'd0) ? {vbl_enable, obj_size, bg_patt, obj_patt, grayscale, playfield_clip, object_clip, enable_playfield} :
+     (ss_off == 10'd1) ? {enable_objects, emphasis, rendering_enabled, sprite0_hit_bg, nmi_occured, vram_read_delayed} :
+     (ss_off == 10'd2) ? vram_latch :
+     (ss_off == 10'd3) ? latched_dout :
+     (ss_off == 10'd4) ? decay_high[7:0] :
+     (ss_off == 10'd5) ? decay_high[15:8] :
+     (ss_off == 10'd6) ? decay_high[23:16] :
+     (ss_off == 10'd7) ? decay_low[7:0] :
+     (ss_off == 10'd8) ? decay_low[15:8] :
+     (ss_off == 10'd9) ? decay_low[23:16] :
+     (ss_off == 10'd10) ? {6'b0, refresh_high, refresh_low} : 8'h00);
 
 assign mapper_ppu_flags = {scanline, cycle, obj_size, is_rendering};
 

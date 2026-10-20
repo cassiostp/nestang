@@ -1,12 +1,15 @@
 # NES co-simulation (`sim/cosim`)
 
 A Verilator model of nestang's real firmware-facing interface logic — the
-`iosys_bl616` UART protocol engine (with OSD text) and the `sdram_nes`
-controller (with the battery-save client) — for the TangCore firmware
-co-simulation (see firmware `host/README.md`, "RTL backend"). No game, no
-video, no audio: it exercises firmware↔core interactions (combos and pad
-frames during play, battery-save dumps/restores, reset, MODE, core_config
-bits) without hardware.
+`iosys_bl616` UART protocol engine (with OSD text), the `sdram_nes`
+controller (with the battery-save client) and the save-state engine
+(`src/savestate.v`) — for the TangCore firmware co-simulation (see
+firmware `host/README.md`, "RTL backend"). No game, no video, no audio:
+it exercises firmware↔core interactions (combos and pad frames during
+play, battery-save dumps/restores, save-state transfers, reset, MODE,
+core_config bits) without hardware. The savestate engine's NES register
+file does not exist here; a 1 KB pattern RAM in `cosim_top.sv` stands in
+for it, while the bulk sections go through the real SDRAM save port.
 
 ## Layout
 

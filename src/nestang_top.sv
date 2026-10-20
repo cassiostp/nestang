@@ -141,6 +141,31 @@ wire save_written;
 wire [12:0] sv_addr;
 wire [7:0] sv_din, sv_q;
 wire sv_we, sv_req, sv_ack;
+
+// Save-states (see savestate.v): the engine freezes the NES and streams the
+// state image over iosys commands 0x18-0x1A, sharing the SDRAM save port
+// with the battery channel while ss_active (firmware settles saves first).
+`ifdef HZ120
+localparam [7:0] SS_VARIANT = 8'd1;
+`else
+localparam [7:0] SS_VARIANT = 8'd0;
+`endif
+wire ss_freeze, ss_reset, ss_loaded, ss_active, ss_point, ss_supported, ss_edge_reset;
+wire ss_sd_ld_we;
+wire [7:0] ss_sd_ld_douta, ss_sd_ld_doutb;
+wire [9:0] ss_a;
+wire [7:0] ss_din_ss, ss_dout_nes;
+wire ss_we_ss;
+wire [21:0] ss_mem_addr;
+wire [7:0] ss_mem_din;
+wire ss_mem_we, ss_mem_req;
+wire [2:0] ss_op;
+wire ss_op_stb;
+wire [127:0] ss_status;
+wire [19:0] ss_img_raddr, ss_img_waddr;
+wire ss_img_rd_stb, ss_img_taken, ss_img_abort, ss_img_rdy, ss_img_wr_stb;
+wire [7:0] ss_img_q, ss_img_wdin;
+wire nes_rst = reset_nes | ss_reset;
 `ifdef VERILATOR
 assign sv_req = 1'b0;     // no iosys in the Verilator sim: keep the save channel quiet
 `endif
@@ -266,7 +291,7 @@ wire [31:0] status;
 
 // Main NES machine
 NES nes(
-    .clk(clk), .reset_nes(reset_nes), .cold_reset(1'b0), .pause(pause | frame_halt),
+    .clk(clk), .reset_nes(nes_rst), .cold_reset(1'b0), .pause(pause | frame_halt | ss_freeze),
     .sys_type(system_type), .nes_div(nes_ce),
     .mapper_flags(mapper_flags),
     .sample(sample), .color(color),
@@ -293,8 +318,47 @@ NES nes(
     .int_audio(int_audio),    // VRC6
     .ext_audio(ext_audio),
 
-    .apu_ce(), .gg(), .gg_code(), .gg_avail(), .gg_reset(), .emphasis(), .save_written(save_written)
+    .apu_ce(), .gg(), .gg_code(), .gg_avail(), .gg_reset(), .emphasis(), .save_written(save_written),
+    .ss_a(ss_a), .ss_din(ss_din_ss), .ss_we(ss_we_ss), .ss_dout(ss_dout_nes),
+    .ss_point(ss_point), .ss_supported(ss_supported)
 );
+
+savestate #(.VARIANT(SS_VARIANT)) ss_engine (
+    .clk(clk), .clkref(clkref), .resetn(sys_resetn),
+    .mapper_flags(mapper_flags),
+    .ss_supported(ss_supported), .ss_point(ss_point),
+    .ss_freeze(ss_freeze), .ss_reset(ss_reset), .ss_loaded(ss_loaded), .ss_edge_reset(ss_edge_reset),
+    .ss_active(ss_active),
+    .ss_a(ss_a), .ss_din(ss_din_ss), .ss_we(ss_we_ss), .ss_dout(ss_dout_nes),
+    .sd_douta(memory_din_ppu), .sd_doutb(memory_din_cpu),
+    .sd_ld_we(ss_sd_ld_we), .sd_ld_douta(ss_sd_ld_douta), .sd_ld_doutb(ss_sd_ld_doutb),
+    .mem_addr(ss_mem_addr), .mem_din(ss_mem_din), .mem_we(ss_mem_we),
+    .mem_req(ss_mem_req), .mem_ack(sv_ack), .mem_q(sv_q),
+    .op(ss_op), .op_stb(ss_op_stb), .ss_status(ss_status),
+    .img_raddr(ss_img_raddr), .img_rd_stb(ss_img_rd_stb),
+    .img_taken(ss_img_taken), .img_abort(ss_img_abort),
+    .img_rdy(ss_img_rdy), .img_q(ss_img_q),
+    .img_waddr(ss_img_waddr), .img_wdin(ss_img_wdin), .img_wr_stb(ss_img_wr_stb)
+);
+
+`ifdef VERILATOR
+// No iosys under Verilator: the sim harness drives the savestate engine
+// through these registers (idle unless a test pokes them).
+reg [2:0]  ss_op_h = 0;
+reg        ss_op_stb_h = 0;
+reg [19:0] ss_img_raddr_h = 0, ss_img_waddr_h = 0;
+reg [7:0]  ss_img_wdin_h = 0;
+reg        ss_img_rd_stb_h = 0, ss_img_taken_h = 0, ss_img_abort_h = 0, ss_img_wr_stb_h = 0;
+assign ss_op = ss_op_h;
+assign ss_op_stb = ss_op_stb_h;
+assign ss_img_raddr = ss_img_raddr_h;
+assign ss_img_waddr = ss_img_waddr_h;
+assign ss_img_wdin = ss_img_wdin_h;
+assign ss_img_rd_stb = ss_img_rd_stb_h;
+assign ss_img_taken = ss_img_taken_h;
+assign ss_img_abort = ss_img_abort_h;
+assign ss_img_wr_stb = ss_img_wr_stb_h;
+`endif
 
 // loader_write -> clock when data available
 reg loader_write_mem;
@@ -342,9 +406,13 @@ sdram_nes sdram (
     .rv_addr({rv_addr[20:2], rv_word}), .rv_din(rv_word ? rv_wdata[31:16] : rv_wdata[15:0]), 
     .rv_ds(rv_ds), .rv_dout(rv_dout), .rv_req(rv_req), .rv_req_ack(rv_req_ack), .rv_we(rv_wstrb != 0)
 `endif
-    // Battery save-RAM: the same 8 KB the mappers route to linear 0x3C0000
-    , .sv_addr({9'b11_1100_000, sv_addr}), .sv_din(sv_din), .sv_we(sv_we),
-    .sv_req(sv_req), .sv_ack(sv_ack), .sv_dout(sv_q)
+    // Battery save-RAM: the same 8 KB the mappers route to linear 0x3C0000.
+    // While a savestate transfer runs the engine owns the port instead.
+    , .sv_addr(ss_active ? ss_mem_addr : {9'b11_1100_000, sv_addr}),
+    .sv_din(ss_active ? ss_mem_din : sv_din), .sv_we(ss_active ? ss_mem_we : sv_we),
+    .sv_req(ss_active ? ss_mem_req : sv_req), .sv_ack(sv_ack), .sv_dout(sv_q),
+    .ss_edge_reset(ss_edge_reset), .ss_ld_we(ss_sd_ld_we),
+    .ss_ld_douta(ss_sd_ld_douta), .ss_ld_doutb(ss_sd_ld_doutb)
 );
 
 // ROM parser
@@ -413,7 +481,7 @@ wire [14:0] overlay_color;      // BGR5
 nes2hdmi u_hdmi (     // purple: RGB=440064 (010001000_00000000_01100100), BGR5=01100_00000_01000
     .clk(clk), .resetn(sys_resetn),
     .color(color), .cycle(cycle), 
-    .scanline(scanline), .sample(pause ? 16'd0 : {~sample[15], sample[14:0]}),  // offset-binary to signed; silent while paused
+    .scanline(scanline), .sample((pause | ss_freeze) ? 16'd0 : {~sample[15], sample[14:0]}),  // offset-binary to signed; silent while paused
     .frame_halt(frame_halt),    // halts the NES once per frame; the pause mute above stays menu-only
     .overlay(overlay), .overlay_x(overlay_x), .overlay_y(overlay_y),
     .overlay_color(overlay_color),
@@ -439,7 +507,7 @@ localparam IOSYS_FREQ = 21_505_376;
 localparam IOSYS_FREQ = 21_491_228;
 `endif
 iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(IOSYS_FREQ), .CORE_ID(1),
-              .SAVE_IF(1), .SAVE_AW(13), .SAVE_SYNC(0) )     // purple nestang logo
+              .SAVE_IF(1), .SAVE_AW(13), .SAVE_SYNC(0), .SS_IF(1) )     // purple nestang logo
     sys_inst (
     .clk(clk), .hclk(hclk), .resetn(sys_resetn),
 
@@ -450,7 +518,13 @@ iosys_bl616 #(.COLOR_LOGO(15'b01100_00000_01000), .FREQ(IOSYS_FREQ), .CORE_ID(1)
     .uart_tx(UART_TXD), .uart_rx(UART_RXD),
 
     .sv_addr(sv_addr), .sv_din(sv_din), .sv_we(sv_we), .sv_q(sv_q),
-    .sv_core_we(save_written), .sv_req(sv_req), .sv_ack(sv_ack),
+    .sv_core_we(save_written | ss_loaded), .sv_req(sv_req), .sv_ack(sv_ack),
+
+    .ss_op(ss_op), .ss_op_stb(ss_op_stb), .ss_status(ss_status),
+    .ss_img_raddr(ss_img_raddr), .ss_img_rd_stb(ss_img_rd_stb),
+    .ss_img_taken(ss_img_taken), .ss_img_abort(ss_img_abort),
+    .ss_img_rdy(ss_img_rdy), .ss_img_q(ss_img_q),
+    .ss_img_waddr(ss_img_waddr), .ss_img_wdin(ss_img_wdin), .ss_img_wr_stb(ss_img_wr_stb),
 
     .rom_loading(loading), .rom_do(loader_do), .rom_do_valid(loader_do_valid)
 );

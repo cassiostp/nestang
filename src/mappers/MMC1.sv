@@ -1,7 +1,9 @@
 // MMC1 mapper chip. Maps prg or chr addresses into a linear address.
 
 // If vram_ce is set, {vram_a10, chr_aout[9:0]} are used to access the NES internal VRAM instead.
-module MMC1(
+module MMC1 #(
+	parameter [9:0] SS_BASE = 10'h150
+) (
 	input        clk,         // System clock
 	input        ce,          // M2 ~cpu_clk
 	input        enable,      // Mapper enabled
@@ -22,7 +24,11 @@ module MMC1(
 	inout        irq_b,       // IRQ
 	input [15:0] audio_in,    // Inverted audio from APU
 	inout [15:0] audio_b,     // Mixed audio output
-	inout [15:0] flags_out_b  // flags {0, 0, 0, 0, 0, prg_conflict, prg_bus_write, has_chr_dout}
+	inout [15:0] flags_out_b,  // flags {0, 0, 0, 0, has_savestate, prg_conflict, prg_bus_write, has_chr_dout}
+	input [9:0]  ss_a,
+	input [7:0]  ss_din,
+	input        ss_we,
+	inout [7:0]  ss_dout_b
 );
 
 assign prg_aout_b   = enable ? prg_aout : 22'hZ;
@@ -34,6 +40,7 @@ assign vram_a10_b   = enable ? vram_a10 : 1'hZ;
 assign vram_ce_b    = enable ? vram_ce : 1'hZ;
 assign irq_b        = enable ? 1'b0 : 1'hZ;
 assign flags_out_b  = enable ? flags_out : 16'hZ;
+wire [9:0] ss_off = ss_a - SS_BASE;
 assign audio_b      = enable ? {1'b0, audio_in[15:1]} : 16'hZ;
 
 wire [21:0] prg_aout, chr_aout;
@@ -42,7 +49,7 @@ wire chr_allow;
 wire vram_a10;
 wire vram_ce;
 wire mapper171 = (flags[7:0] == 171); //Mapper 171 has hardwired mirroring
-reg [15:0] flags_out = 0;
+reg [15:0] flags_out = {12'h0, 1'b1, 3'b0};  // has_savestate
 
 reg [4:0] shift;
 
@@ -85,6 +92,15 @@ always @(posedge clk)
 		chr_bank_1 <= 0;
 		prg_bank <= 5'b00000;
 		delay_ctrl <= 0;
+	end else if (ss_we) begin
+		case (ss_off)
+		10'd0: {delay_ctrl, shift} <= {ss_din[7], ss_din[4:0]};
+		10'd1: control <= ss_din[4:0];
+		10'd2: chr_bank_0 <= ss_din[4:0];
+		10'd3: chr_bank_1 <= ss_din[4:0];
+		10'd4: prg_bank <= ss_din[4:0];
+		default: ;
+		endcase
 	end else if (ce) begin
 		if (!prg_write)
 			delay_ctrl <= 1'b0;
@@ -157,6 +173,13 @@ wire [21:0] prg_ram = {9'b11_1100_000, prg_ain[12:0]};
 assign prg_aout = prg_is_ram ? prg_ram : prg_aout_tmp;
 assign chr_allow = flags[15];
 
+assign ss_dout_b    = enable ?
+    ((ss_off == 10'd0) ? {delay_ctrl, 2'b0, shift} :
+     (ss_off == 10'd1) ? {3'b0, control} :
+     (ss_off == 10'd2) ? {3'b0, chr_bank_0} :
+     (ss_off == 10'd3) ? {3'b0, chr_bank_1} :
+     (ss_off == 10'd4) ? {3'b0, prg_bank} : 8'h00) : 8'hZ;
+
 endmodule
 
 
@@ -196,6 +219,8 @@ wire [3:0] mmc1_chr = mmc1_chr_addr[16:13]; // Upper 4 CHR output control bits f
 wire [21:0] mmc1_aout;                 // PRG output address from MMC chip
 wire irq;
 
+wire [15:0] mmc1_flags;
+assign flags_out_b = enable ? {mmc1_flags[15:4], 1'b0, mmc1_flags[2:0]} : 16'hZ;  // no savestate for mapper 105 in v1
 MMC1 mmc1_nesevent(
 	.clk        (clk),
 	.ce         (ce),
@@ -215,9 +240,10 @@ MMC1 mmc1_nesevent(
 	.vram_ce_b  (vram_ce_b),
 	.irq_b      (),
 	.chr_read(),
-	.flags_out_b(flags_out_b),
+	.flags_out_b(mmc1_flags),
 	.audio_in   (audio_in),
-	.audio_b    (audio_b)
+	.audio_b    (audio_b),
+	.ss_a(10'd0), .ss_din(8'd0), .ss_we(1'b0), .ss_dout_b()
 );
 
 // $A000-BFFF:   [...I OAA.]

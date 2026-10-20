@@ -76,7 +76,24 @@ module sdram_nes #(
     input             sv_we,
     input             sv_req,       // level, async to clk
     output reg        sv_ack,       // follows sv_req per served transaction, clk domain
-    output reg  [7:0] sv_dout
+    output reg  [7:0] sv_dout,
+
+    // Save-state load: pulse while the NES is frozen with restored state on
+    // the address bus. Clearing the request edge detectors makes the
+    // pending fetch at the restored address issue (and complete) during
+    // the freeze, so doutA/doutB hold the capture-time bytes at resume --
+    // exactly what the save-side freeze did for the original run. Without
+    // it, a level that never toggled across the load is mistaken for an
+    // already-served request and the CPU fetches stale data.
+    input             ss_edge_reset,
+
+    // Save-state load: restore the read-data output registers. At capture
+    // the last fetch has typically completed but not yet been consumed by
+    // the CPU/PPU (its byte sits only in doutA/doutB), and no new request
+    // edge will re-issue it -- the byte must travel in the state image.
+    input             ss_ld_we,
+    input       [7:0] ss_ld_douta,
+    input       [7:0] ss_ld_doutb
 );
 
 localparam DQM_SIZE = SDRAM_DATA_WIDTH / 8;
@@ -280,6 +297,11 @@ always @(posedge clk) begin
                 cycle[5:0] <= {cycle[4:0], cycle[5]};
             refresh_cnt <= refresh_cnt + 1'd1;
             
+            if (ss_edge_reset) begin
+                oeA_d <= 0; weA_d <= 0;
+                oeB_d <= 0; weB_d <= 0;
+            end
+
             // RAS
             // CPU, PPU
             if (cycle[0]) begin
@@ -395,6 +417,10 @@ always @(posedge clk) begin
                 PORT_SAVE: sv_dout <= dq_byte;
                 default: ;
                 endcase
+            end
+            if (ss_ld_we) begin
+                doutA <= ss_ld_douta;
+                doutB <= ss_ld_doutb;
             end
 
             // RV

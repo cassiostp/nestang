@@ -62,13 +62,22 @@ module cart_top (
 	output reg  [1:0] diskside_auto,
 	input       [1:0] diskside,
 	input             fds_busy,       // FDS Disk Swap Busy
-	input             fds_eject       // FDS Disk Swap Pause
+	input             fds_eject,      // FDS Disk Swap Pause
+	// Save-state byte bus (see src/savestate.v). Only mappers with
+	// flags_out bit 3 (has_savestate) drive ss_dout_b / latch ss_we.
+	input      [9:0]  ss_a,
+	input      [7:0]  ss_din,
+	input             ss_we,
+	output     [7:0]  ss_dout,
+	output reg        has_savestate
 );
 
 tri0 prg_allow_b, vram_a10_b, vram_ce_b, chr_allow_b, irq_b;
 tri0 [21:0] prg_addr_b, chr_addr_b;
 tri0 [15:0] flags_out_b, audio_out_b;
 tri1 [7:0] prg_dout_b, chr_dout_b;
+tri0 [7:0] ss_dout_b;
+assign ss_dout = ss_dout_b;
 
 // This mapper used to be default if no other mapper was found
 // It seems MMC0 is handled by map28. Does it have any purpose?
@@ -95,7 +104,8 @@ MMC0 mmc0(
 	.irq_b      (irq_b),
 	.flags_out_b(mmc0_flags),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -126,7 +136,8 @@ MMC1 mmc1(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -159,7 +170,8 @@ Mapper28 map28(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -190,7 +202,8 @@ Mapper30 map30(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -252,7 +265,8 @@ MMC2 mmc2(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -288,7 +302,8 @@ MMC3 mmc3 (
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -319,7 +334,8 @@ MMC4 mmc4(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -389,7 +405,8 @@ Mapper13 map13(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -522,7 +539,8 @@ Mapper34 map34(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -647,7 +665,8 @@ Mapper66 map66(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -771,7 +790,8 @@ Mapper71 map71(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -833,7 +853,8 @@ Mapper77 map77(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -864,7 +885,8 @@ Mapper78 map78(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -896,7 +918,8 @@ Mapper79 map79(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -958,7 +981,8 @@ Mapper89 map89(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -989,7 +1013,8 @@ Mapper107 map107(
 	.irq_b      (irq_b),
 	.flags_out_b(flags_out_b),
 	.audio_in   (audio_in),
-	.audio_b    (audio_out_b)
+	.audio_b    (audio_out_b),
+	.ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout_b(ss_dout_b)
 );
 
 //*****************************************************************************//
@@ -1900,6 +1925,7 @@ always @* begin
 
 	// Behavior helper flags
 	{prg_conflict, prg_bus_write, has_chr_dout} = {flags_out_b[2], flags_out_b[1], flags_out_b[0]};
+	has_savestate = flags_out_b[3];
 
 	// Address translation for SDRAM
 	if (prg_aout[21] == 1'b0)

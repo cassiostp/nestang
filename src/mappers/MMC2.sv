@@ -1,7 +1,9 @@
 // MMC 2 and 4 mappers. These can probably be consolidated.
 
 // MMC2 mapper chip. PRG ROM: 128kB. Bank Size: 8kB. CHR ROM: 128kB
-module MMC2(
+module MMC2 #(
+	parameter [9:0] SS_BASE = 10'h150
+) (
 	input        clk,         // System clock
 	input        ce,          // M2 ~cpu_clk
 	input        enable,      // Mapper enabled
@@ -22,7 +24,11 @@ module MMC2(
 	inout        irq_b,       // IRQ
 	input [15:0] audio_in,    // Inverted audio from APU
 	inout [15:0] audio_b,     // Mixed audio output
-	inout [15:0] flags_out_b  // flags {0, 0, 0, 0, 0, prg_conflict, prg_bus_write, has_chr_dout}
+	inout [15:0] flags_out_b,  // flags {0, 0, 0, 0, has_savestate, prg_conflict, prg_bus_write, has_chr_dout}
+	input [9:0]  ss_a,
+	input [7:0]  ss_din,
+	input        ss_we,
+	inout [7:0]  ss_dout_b
 );
 
 assign prg_aout_b   = enable ? prg_aout : 22'hZ;
@@ -34,6 +40,7 @@ assign vram_a10_b   = enable ? vram_a10 : 1'hZ;
 assign vram_ce_b    = enable ? vram_ce : 1'hZ;
 assign irq_b        = enable ? 1'b0 : 1'hZ;
 assign flags_out_b  = enable ? flags_out : 16'hZ;
+wire [9:0] ss_off = ss_a - SS_BASE;
 assign audio_b      = enable ? {1'b0, audio_in[15:1]} : 16'hZ;
 
 wire [21:0] prg_aout, chr_aout;
@@ -42,7 +49,7 @@ wire chr_allow;
 wire vram_a10;
 wire vram_ce;
 
-reg [15:0] flags_out = 0;
+reg [15:0] flags_out = {12'h0, 1'b1, 3'b0};  // has_savestate
 
 // PRG ROM bank select ($A000-$AFFF)
 // 7  bit  0
@@ -102,7 +109,17 @@ reg latch_0, latch_1;
 always @(posedge clk)
 if (~enable)
 	{prg_bank, chr_bank_0a, chr_bank_0b, chr_bank_1a, chr_bank_1b, mirroring} <= 0;
-else if (ce) begin
+else if (ss_we) begin
+	case (ss_off)
+	10'd0: prg_bank <= ss_din[3:0];
+	10'd1: chr_bank_0a <= ss_din[4:0];
+	10'd2: chr_bank_0b <= ss_din[4:0];
+	10'd3: chr_bank_1a <= ss_din[4:0];
+	10'd4: chr_bank_1b <= ss_din[4:0];
+	10'd5: mirroring <= ss_din[2];
+	default: ;
+	endcase
+end else if (ce) begin
 	if (prg_write && prg_ain[15]) begin
 		case(prg_ain[14:12])
 			2: prg_bank <= prg_din[3:0];     // $A000
@@ -122,7 +139,9 @@ end
 always @(posedge clk)
 if (~enable)
 	{latch_0, latch_1} <= 0;
-else if (ce && chr_read) begin
+else if (ss_we) begin
+	if (ss_off == 10'd5) {latch_0, latch_1} <= ss_din[1:0];
+end else if (ce && chr_read) begin
 	latch_0 <= (chr_ain & 14'h3fff) == 14'h0fd8 ? 1'd0 : (chr_ain & 14'h3fff) == 14'h0fe8 ? 1'd1 : latch_0;
 	latch_1 <= (chr_ain & 14'h3ff8) == 14'h1fd8 ? 1'd0 : (chr_ain & 14'h3ff8) == 14'h1fe8 ? 1'd1 : latch_1;
 end
@@ -158,10 +177,20 @@ assign vram_ce = chr_ain[13];
 assign prg_allow = prg_ain[15] && !prg_write;
 assign chr_allow = flags[15];
 
+assign ss_dout_b = enable ?
+    ((ss_off == 10'd0) ? {4'b0, prg_bank} :
+     (ss_off == 10'd1) ? {3'b0, chr_bank_0a} :
+     (ss_off == 10'd2) ? {3'b0, chr_bank_0b} :
+     (ss_off == 10'd3) ? {3'b0, chr_bank_1a} :
+     (ss_off == 10'd4) ? {3'b0, chr_bank_1b} :
+     (ss_off == 10'd5) ? {5'b0, mirroring, latch_0, latch_1} : 8'h00) : 8'hZ;
+
 endmodule
 
 // MMC4 mapper chip. PRG ROM: 256kB. Bank Size: 16kB. CHR ROM: 128kB
-module MMC4(
+module MMC4 #(
+	parameter [9:0] SS_BASE = 10'h150
+) (
 	input        clk,         // System clock
 	input        ce,          // M2 ~cpu_clk
 	input        enable,      // Mapper enabled
@@ -182,7 +211,11 @@ module MMC4(
 	inout        irq_b,       // IRQ
 	input [15:0] audio_in,    // Inverted audio from APU
 	inout [15:0] audio_b,     // Mixed audio output
-	inout [15:0] flags_out_b  // flags {0, 0, 0, 0, 0, prg_conflict, prg_bus_write, has_chr_dout}
+	inout [15:0] flags_out_b,  // flags {0, 0, 0, 0, has_savestate, prg_conflict, prg_bus_write, has_chr_dout}
+	input [9:0]  ss_a,
+	input [7:0]  ss_din,
+	input        ss_we,
+	inout [7:0]  ss_dout_b
 );
 
 assign prg_aout_b   = enable ? prg_aout : 22'hZ;
@@ -194,6 +227,7 @@ assign vram_a10_b   = enable ? vram_a10 : 1'hZ;
 assign vram_ce_b    = enable ? vram_ce : 1'hZ;
 assign irq_b        = enable ? 1'b0 : 1'hZ;
 assign flags_out_b  = enable ? flags_out : 16'hZ;
+wire [9:0] ss_off = ss_a - SS_BASE;
 assign audio_b      = enable ? {1'b0, audio_in[15:1]} : 16'hZ;
 
 wire [21:0] prg_aout, chr_aout;
@@ -202,7 +236,7 @@ wire prg_allow;
 wire chr_allow;
 wire vram_a10;
 wire vram_ce;
-reg [15:0] flags_out = 0;
+reg [15:0] flags_out = {12'h0, 1'b1, 3'b0};  // has_savestate
 
 // PRG ROM bank select ($A000-$AFFF)
 // 7  bit  0
@@ -259,8 +293,18 @@ reg mirroring;
 reg latch_0, latch_1;
 
 // Update registers
-always @(posedge clk) 
-if (ce) begin
+always @(posedge clk)
+if (ss_we) begin
+	case (ss_off)
+	10'd0: prg_bank <= ss_din[3:0];
+	10'd1: chr_bank_0a <= ss_din[4:0];
+	10'd2: chr_bank_0b <= ss_din[4:0];
+	10'd3: chr_bank_1a <= ss_din[4:0];
+	10'd4: chr_bank_1b <= ss_din[4:0];
+	10'd5: mirroring <= ss_din[2];
+	default: ;
+	endcase
+end else if (ce) begin
 	if (~enable)
 		prg_bank <= 4'b1110;
 	else if (prg_write && prg_ain[15]) begin
@@ -280,7 +324,9 @@ end
 // PPU reads $1FD8 through $1FDF: latch 1 is set to $FD for subsequent reads
 // PPU reads $1FE8 through $1FEF: latch 1 is set to $FE for subsequent reads
 always @(posedge clk)
-if (ce & chr_read) begin
+if (ss_we) begin
+	if (ss_off == 10'd5) {latch_0, latch_1} <= ss_din[1:0];
+end else if (ce & chr_read) begin
 	latch_0 <= (chr_ain & 14'h3ff8) == 14'h0fd8 ? 1'd0 : (chr_ain & 14'h3ff8) == 14'h0fe8 ? 1'd1 : latch_0;
 	latch_1 <= (chr_ain & 14'h3ff8) == 14'h1fd8 ? 1'd0 : (chr_ain & 14'h3ff8) == 14'h1fe8 ? 1'd1 : latch_1;
 end
@@ -319,5 +365,13 @@ wire prg_is_ram = prg_ain >= 'h6000 && prg_ain < 'h8000;
 assign prg_allow = prg_ain[15] && !prg_write || prg_is_ram;
 wire [21:0] prg_ram = {9'b11_1100_000, prg_ain[12:0]};
 assign prg_aout = prg_is_ram ? prg_ram : prg_aout_tmp;
+
+assign ss_dout_b = enable ?
+    ((ss_off == 10'd0) ? {4'b0, prg_bank} :
+     (ss_off == 10'd1) ? {3'b0, chr_bank_0a} :
+     (ss_off == 10'd2) ? {3'b0, chr_bank_0b} :
+     (ss_off == 10'd3) ? {3'b0, chr_bank_1a} :
+     (ss_off == 10'd4) ? {3'b0, chr_bank_1b} :
+     (ss_off == 10'd5) ? {5'b0, mirroring, latch_0, latch_1} : 8'h00) : 8'hZ;
 
 endmodule

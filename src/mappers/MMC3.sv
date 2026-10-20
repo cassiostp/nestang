@@ -192,7 +192,9 @@ assign vram_ce = chr_ain[13];
 endmodule
 
 // This mapper also handles mapper 33,47,48,74,76,80,82,88,95,118,119,154,191,192,194,195,206 and 207.
-module MMC3 (
+module MMC3 #(
+	parameter [9:0] SS_BASE = 10'h150
+) (
 	input        clk,         // System clock
 	input        ce,          // M2 ~cpu_clk
 	input        enable,      // Mapper enabled
@@ -213,7 +215,11 @@ module MMC3 (
 	inout        irq_b,       // IRQ
 	input [15:0] audio_in,    // Inverted audio from APU
 	inout [15:0] audio_b,     // Mixed audio output
-	inout [15:0] flags_out_b  // flags {0, 0, 0, 0, 0, prg_conflict, prg_bus_write, has_chr_dout}
+	inout [15:0] flags_out_b,  // flags {0, 0, 0, 0, has_savestate, prg_conflict, prg_bus_write, has_chr_dout}
+	input [9:0]  ss_a,
+	input [7:0]  ss_din,
+	input        ss_we,
+	inout [7:0]  ss_dout_b
 );
 
 assign prg_aout_b   = enable ? prg_aout : 22'hZ;
@@ -226,6 +232,7 @@ assign vram_ce_b    = enable ? vram_ce : 1'hZ;
 assign irq_b        = enable ? irq : 1'hZ;
 assign flags_out_b  = enable ? flags_out : 16'hZ;
 assign audio_b      = enable ? {1'b0, audio_in[15:1]} : 16'hZ;
+wire [9:0] ss_off = ss_a - SS_BASE;
 
 wire [21:0] prg_aout, chr_aout;
 wire [7:0] prg_dout = 0;
@@ -234,7 +241,7 @@ wire chr_allow;
 wire vram_a10;
 wire vram_ce;
 wire irq;
-reg [15:0] flags_out = 0;
+reg [15:0] flags_out = {12'h0, 1'b1, 3'b0};  // has_savestate
 
 reg [2:0] bank_select;             // Register to write to next
 reg prg_rom_bank_mode;             // Mode for PRG banking
@@ -308,6 +315,26 @@ if (~enable) begin
 	a12_ctr <= 0;
 	last_a12 <= 0;
 	mapper37_multicart <= 3'b000;
+end else if (ss_we) begin
+	case (ss_off)
+	10'd0: {chr_a12_invert, prg_rom_bank_mode, ram6_enabled, bank_select, mirroring} <= ss_din[7:1];
+	10'd1: chr_bank_0 <= ss_din;
+	10'd2: chr_bank_1 <= ss_din;
+	10'd3: chr_bank_2 <= ss_din;
+	10'd4: chr_bank_3 <= ss_din;
+	10'd5: chr_bank_4 <= ss_din;
+	10'd6: chr_bank_5 <= ss_din;
+	10'd7: prg_bank_0 <= ss_din[5:0];
+	10'd8: prg_bank_1 <= ss_din[5:0];
+	10'd9: prg_bank_2 <= ss_din[5:0];
+	10'd10: irq_latch <= ss_din;
+	10'd11: counter <= ss_din;
+	10'd12: {ram_enable, ram_protect} <= ss_din;
+	10'd13: {irq_enable, irq_reload, ram6_enable, ram6_protect, last_a12, mapper47_multicart} <= ss_din[7:2];
+	10'd14: irq_reg <= ss_din[4:0];
+	10'd15: {a12_ctr, mapper37_multicart} <= ss_din[6:0];
+	default: ;
+	endcase
 end else if (ce) begin
 	irq_reg[4:1] <= irq_reg[3:0]; // 4 cycle delay
 	if (!regs_7e && prg_write && prg_ain[15]) begin
@@ -525,6 +552,24 @@ assign vram_a10 = TxSROM ? chrsel[7] :              // TxSROM do not support mir
 					mapper207 ? chrsel[7] :         // mapper207 does not support mirroring
 					(mirroring ? chr_ain[10] : chr_ain[11]);
 assign vram_ce = chr_ain[13] && !four_screen_mirroring;
+
+assign ss_dout_b = enable ?
+    ((ss_off == 10'd0) ? {chr_a12_invert, prg_rom_bank_mode, ram6_enabled, bank_select, mirroring, 1'b0} :
+     (ss_off == 10'd1) ? chr_bank_0 :
+     (ss_off == 10'd2) ? chr_bank_1 :
+     (ss_off == 10'd3) ? chr_bank_2 :
+     (ss_off == 10'd4) ? chr_bank_3 :
+     (ss_off == 10'd5) ? chr_bank_4 :
+     (ss_off == 10'd6) ? chr_bank_5 :
+     (ss_off == 10'd7) ? {2'b0, prg_bank_0} :
+     (ss_off == 10'd8) ? {2'b0, prg_bank_1} :
+     (ss_off == 10'd9) ? {2'b0, prg_bank_2} :
+     (ss_off == 10'd10) ? irq_latch :
+     (ss_off == 10'd11) ? counter :
+     (ss_off == 10'd12) ? {ram_enable, ram_protect} :
+     (ss_off == 10'd13) ? {irq_enable, irq_reload, ram6_enable, ram6_protect, last_a12, mapper47_multicart, 2'b0} :
+     (ss_off == 10'd14) ? {3'b0, irq_reg} :
+     (ss_off == 10'd15) ? {1'b0, a12_ctr, mapper37_multicart} : 8'h00) : 8'hZ;
 
 endmodule
 

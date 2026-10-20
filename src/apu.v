@@ -1,7 +1,9 @@
 // Rewritten 6/4/2020 by Kitrinx
 // This code is GPLv3.
 
-module LenCounterUnit (
+module LenCounterUnit #(
+    parameter [9:0] SS_BASE = 10'h3FF   // savestate image offset (0x3FF = unused)
+) (
     input  logic       clk,
     input  logic       reset,
     input  logic       cold_reset,
@@ -14,15 +16,26 @@ module LenCounterUnit (
     input  logic       is_triangle,
     input  logic       write,
     input  logic       enabled,
-    output logic       lc_on
+    output logic       lc_on,
+    input  logic [9:0] ss_a,
+    input  logic [7:0] ss_din,
+    input  logic       ss_we,
+    output logic [7:0] ss_dout
 );
 
+    // Lifted to module scope for savestate access (was block-local).
+    logic [7:0] len_counter_int;
+    logic halt, halt_next;
+    logic [7:0] len_counter_next;
+    logic lc_on_1;
+    logic clear_next;
+
+    wire [9:0] ss_off = ss_a - SS_BASE;
+    assign ss_dout = (ss_off == 10'd0) ? len_counter_int :
+                     (ss_off == 10'd1) ? len_counter_next :
+                     (ss_off == 10'd2) ? {4'b0, halt, lc_on, lc_on_1, clear_next} : 8'h00;
+
     always_ff @(posedge clk) begin : lenunit
-        logic [7:0] len_counter_int;
-        logic halt, halt_next;
-        logic [7:0] len_counter_next;
-        logic lc_on_1;
-        logic clear_next;
 
         if (aclk1_d)
             if (~enabled)
@@ -58,30 +71,51 @@ module LenCounterUnit (
             len_counter_int <= 0;
             len_counter_next <= 0;
         end
+
+        if (ss_we) begin
+            case (ss_off)
+            10'd0: len_counter_int <= ss_din;
+            10'd1: len_counter_next <= ss_din;
+            10'd2: {halt, lc_on, lc_on_1, clear_next} <= ss_din[3:0];
+            default: ;
+            endcase
+        end
     end
 
 endmodule
 
-module EnvelopeUnit (
+module EnvelopeUnit #(
+    parameter [9:0] SS_BASE = 10'h3FF
+) (
     input  logic       clk,
     input  logic       reset,
     input  logic       env_clk,
     input  logic [5:0] din,
     input  logic       addr,
     input  logic       write,
-    output logic [3:0] envelope
+    output logic [3:0] envelope,
+    input  logic [9:0] ss_a,
+    input  logic [7:0] ss_din,
+    input  logic       ss_we,
+    output logic [7:0] ss_dout
 );
 
     logic [3:0] env_count, env_vol;
     logic env_disabled;
+    // Lifted to module scope for savestate access (was block-local).
+    logic [3:0] env_div;
+    logic env_reload;
+    logic env_loop;
+    logic env_reset;
 
     assign envelope = env_disabled ? env_vol : env_count;
 
+    wire [9:0] ss_off = ss_a - SS_BASE;
+    assign ss_dout = (ss_off == 10'd0) ? {2'b0, env_loop, env_disabled, env_vol} :
+                     (ss_off == 10'd1) ? {env_reload, 3'b0, env_count} :
+                     (ss_off == 10'd2) ? {4'b0, env_div} : 8'h00;
+
     always_ff @(posedge clk) begin : envunit
-        logic [3:0] env_div;
-        logic env_reload;
-        logic env_loop;
-        logic env_reset;
 
         if (env_clk) begin
             if (~env_reload) begin
@@ -110,11 +144,22 @@ module EnvelopeUnit (
             env_count <= 0;
             env_reload <= 0;
         end
+
+        if (ss_we) begin
+            case (ss_off)
+            10'd0: {env_loop, env_disabled, env_vol} <= ss_din[5:0];
+            10'd1: {env_reload, env_count} <= {ss_din[7], ss_din[3:0]};
+            10'd2: env_div <= ss_din[3:0];
+            default: ;
+            endcase
+        end
     end
 
 endmodule
 
-module SquareChan (
+module SquareChan #(
+    parameter [9:0] SS_BASE = 10'h3F0
+) (
     input  logic       MMC5,
     input  logic       clk,
     input  logic       ce,
@@ -133,7 +178,11 @@ module SquareChan (
     input  logic       odd_or_even,
     input  logic       Enabled,
     output logic [3:0] Sample,
-    output logic       IsNonZero
+    output logic       IsNonZero,
+    input  logic [9:0] ss_a,
+    input  logic [7:0] ss_din,
+    input  logic       ss_we,
+    output logic [7:0] ss_dout
 );
 
     // Register 1
@@ -167,7 +216,19 @@ module SquareChan (
     assign ValidFreq = (MMC5 && allow_us) || ((|Period[10:3]) && (SweepNegate || ~NewSweepPeriod[11]));
     assign Sample = (~lc | ~ValidFreq | ~DutyEnabledUsed) ? 4'd0 : Envelope;
 
-    LenCounterUnit LenSq (
+    logic [7:0] ss_len_dout, ss_env_dout;
+    wire [9:0] ss_off = ss_a - SS_BASE;
+    assign ss_dout = ss_len_dout | ss_env_dout |
+        ((ss_off == 10'd0) ? {6'b0, Duty} :
+         (ss_off == 10'd1) ? {SweepEnable, SweepPeriod, SweepNegate, SweepShift} :
+         (ss_off == 10'd2) ? Period[7:0] :
+         (ss_off == 10'd3) ? {5'b0, Period[10:8]} :
+         (ss_off == 10'd4) ? TimerCtr[7:0] :
+         (ss_off == 10'd5) ? {4'b0, TimerCtr[11:8]} :
+         (ss_off == 10'd6) ? {5'b0, SeqPos} :
+         (ss_off == 10'd7) ? {SweepReset, 4'b0, SweepDivider} : 8'h00);
+
+    LenCounterUnit #(.SS_BASE(SS_BASE + 10'd8)) LenSq (
         .clk            (clk),
         .reset          (reset),
         .cold_reset     (cold_reset),
@@ -180,17 +241,19 @@ module SquareChan (
         .is_triangle    (1'b0),
         .write          (subunit_write),
         .enabled        (Enabled),
-        .lc_on          (lc)
+        .lc_on          (lc),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_len_dout)
     );
 
-    EnvelopeUnit EnvSq (
+    EnvelopeUnit #(.SS_BASE(SS_BASE + 10'd12)) EnvSq (
         .clk            (clk),
         .reset          (reset),
         .env_clk        (Env_Clock),
         .din            (DIN[5:0]),
         .addr           (Addr[0]),
         .write          (subunit_write),
-        .envelope       (Envelope)
+        .envelope       (Envelope),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_env_dout)
     );
 
     always_comb begin
@@ -259,11 +322,27 @@ module SquareChan (
             TimerCtr <= 0;
             SeqPos <= 0;
         end
+
+        if (ss_we) begin
+            case (ss_off)
+            10'd0: Duty <= ss_din[1:0];
+            10'd1: {SweepEnable, SweepPeriod, SweepNegate, SweepShift} <= ss_din;
+            10'd2: Period[7:0] <= ss_din;
+            10'd3: Period[10:8] <= ss_din[2:0];
+            10'd4: TimerCtr[7:0] <= ss_din;
+            10'd5: TimerCtr[11:8] <= ss_din[3:0];
+            10'd6: SeqPos <= ss_din[2:0];
+            10'd7: {SweepReset, SweepDivider} <= {ss_din[7], ss_din[2:0]};
+            default: ;
+            endcase
+        end
     end
 
 endmodule
 
-module TriangleChan (
+module TriangleChan #(
+    parameter [9:0] SS_BASE = 10'h3F0
+) (
     input  logic       clk,
     input  logic       phi1,
     input  logic       aclk1,
@@ -279,7 +358,11 @@ module TriangleChan (
     input  logic       LinCtr_Clock,
     input  logic       Enabled,
     output logic [3:0] Sample,
-    output logic       IsNonZero
+    output logic       IsNonZero,
+    input  logic [9:0] ss_a,
+    input  logic [7:0] ss_din,
+    input  logic       ss_we,
+    output logic [7:0] ss_dout
 );
     logic [10:0] Period, applied_period, TimerCtr;
     logic [4:0] SeqPos;
@@ -298,7 +381,22 @@ module TriangleChan (
 
     assign Sample = (applied_period > 1 || allow_us) ? (SeqPos[3:0] ^ {4{~SeqPos[4]}}) : sample_latch;
 
-    LenCounterUnit LenTri (
+    logic [7:0] ss_len_dout;
+    wire [9:0] ss_off = ss_a - SS_BASE;
+    assign ss_dout = ss_len_dout |
+        ((ss_off == 10'd0) ? Period[7:0] :
+         (ss_off == 10'd1) ? {5'b0, Period[10:8]} :
+         (ss_off == 10'd2) ? applied_period[7:0] :
+         (ss_off == 10'd3) ? {5'b0, applied_period[10:8]} :
+         (ss_off == 10'd4) ? TimerCtr[7:0] :
+         (ss_off == 10'd5) ? {5'b0, TimerCtr[10:8]} :
+         (ss_off == 10'd6) ? {3'b0, SeqPos} :
+         (ss_off == 10'd7) ? {LinCtrl, LinCtrPeriod} :
+         (ss_off == 10'd8) ? {1'b0, LinCtrPeriod_1} :
+         (ss_off == 10'd9) ? {line_reload, LinCtr} :
+         (ss_off == 10'd10) ? {4'b0, sample_latch} : 8'h00);
+
+    LenCounterUnit #(.SS_BASE(SS_BASE + 10'd11)) LenTri (
         .clk            (clk),
         .reset          (reset),
         .cold_reset     (cold_reset),
@@ -311,7 +409,8 @@ module TriangleChan (
         .is_triangle    (1'b1),
         .write          (subunit_write),
         .enabled        (Enabled),
-        .lc_on          (lc)
+        .lc_on          (lc),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_len_dout)
     );
 
     always_ff @(posedge clk) begin
@@ -368,11 +467,30 @@ module TriangleChan (
         end
 
         if (applied_period > 1) sample_latch <= Sample;
+
+        if (ss_we) begin
+            case (ss_off)
+            10'd0: Period[7:0] <= ss_din;
+            10'd1: Period[10:8] <= ss_din[2:0];
+            10'd2: applied_period[7:0] <= ss_din;
+            10'd3: applied_period[10:8] <= ss_din[2:0];
+            10'd4: TimerCtr[7:0] <= ss_din;
+            10'd5: TimerCtr[10:8] <= ss_din[2:0];
+            10'd6: SeqPos <= ss_din[4:0];
+            10'd7: {LinCtrl, LinCtrPeriod} <= ss_din;
+            10'd8: LinCtrPeriod_1 <= ss_din[6:0];
+            10'd9: {line_reload, LinCtr} <= ss_din;
+            10'd10: sample_latch <= ss_din[3:0];
+            default: ;
+            endcase
+        end
     end
 
 endmodule
 
-module NoiseChan (
+module NoiseChan #(
+    parameter [9:0] SS_BASE = 10'h3F0
+) (
     input  logic       clk,
     input  logic       ce,
     input  logic       aclk1,
@@ -388,7 +506,11 @@ module NoiseChan (
     input  logic       Env_Clock,
     input  logic       Enabled,
     output logic [3:0] Sample,
-    output logic       IsNonZero
+    output logic       IsNonZero,
+    input  logic [9:0] ss_a,
+    input  logic [7:0] ss_din,
+    input  logic       ss_we,
+    output logic [7:0] ss_dout
 );
     logic ShortMode;
     logic [14:0] Shift;
@@ -404,7 +526,10 @@ module NoiseChan (
     // Produce the output signal
     assign Sample = (~lc || Shift[14]) ? 4'd0 : Envelope;
 
-    LenCounterUnit LenNoi (
+    logic [7:0] ss_len_dout, ss_env_dout;
+    wire [9:0] ss_off = ss_a - SS_BASE;
+
+    LenCounterUnit #(.SS_BASE(SS_BASE + 10'd8)) LenNoi (
         .clk            (clk),
         .reset          (reset),
         .cold_reset     (cold_reset),
@@ -417,17 +542,19 @@ module NoiseChan (
         .is_triangle    (1'b0),
         .write          (subunit_write),
         .enabled        (Enabled),
-        .lc_on          (lc)
+        .lc_on          (lc),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_len_dout)
     );
 
-    EnvelopeUnit EnvNoi (
+    EnvelopeUnit #(.SS_BASE(SS_BASE + 10'd12)) EnvNoi (
         .clk            (clk),
         .reset          (reset),
         .env_clk        (Env_Clock),
         .din            (DIN[5:0]),
         .addr           (Addr[0]),
         .write          (subunit_write),
-        .envelope       (Envelope)
+        .envelope       (Envelope),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_env_dout)
     );
 
     logic [10:0] noise_pal_lut[16];
@@ -449,6 +576,12 @@ module NoiseChan (
 
     logic [10:0] noise_timer;
     logic noise_clock;
+    assign ss_dout = ss_len_dout | ss_env_dout |
+        ((ss_off == 10'd0) ? {ShortMode, 3'b0, Period} :
+         (ss_off == 10'd1) ? Shift[7:0] :
+         (ss_off == 10'd2) ? {1'b0, Shift[14:8]} :
+         (ss_off == 10'd3) ? noise_timer[7:0] :
+         (ss_off == 10'd4) ? {noise_clock, 4'b0, noise_timer[10:8]} : 8'h00);
     always_ff @(posedge clk) begin
         if (aclk1_d) begin
             noise_timer <= {noise_timer[9:0], (noise_timer[10] ^ noise_timer[8]) | ~|noise_timer};
@@ -479,10 +612,23 @@ module NoiseChan (
 
         if (cold_reset)
             noise_timer <= 0;
+
+        if (ss_we) begin
+            case (ss_off)
+            10'd0: {ShortMode, Period} <= {ss_din[7], ss_din[3:0]};
+            10'd1: Shift[7:0] <= ss_din;
+            10'd2: Shift[14:8] <= ss_din[6:0];
+            10'd3: noise_timer[7:0] <= ss_din;
+            10'd4: {noise_clock, noise_timer[10:8]} <= {ss_din[7], ss_din[2:0]};
+            default: ;
+            endcase
+        end
     end
 endmodule
 
-module DmcChan (
+module DmcChan #(
+    parameter [9:0] SS_BASE = 10'h3F0
+) (
     input  logic        MMC5,
     input  logic        clk,
     input  logic        aclk1,
@@ -499,7 +645,11 @@ module DmcChan (
     output logic        irq,
     output logic  [6:0] Sample,
     output logic        dma_req,      // 1 when DMC wants DMA
-    output logic        enable
+    output logic        enable,
+    input  logic [9:0]  ss_a,
+    input  logic [7:0]  ss_din,
+    input  logic        ss_we,
+    output logic [7:0]  ss_dout
 );
     logic irq_enable;
     logic loop;                 // Looping enabled
@@ -539,6 +689,23 @@ module DmcChan (
 
 
     logic reload_next;
+    wire [9:0] ss_off = ss_a - SS_BASE;
+    assign ss_dout =
+        (ss_off == 10'd0) ? {irq_enable, loop, 2'b0, frequency} :
+        (ss_off == 10'd1) ? dmc_volume :
+        (ss_off == 10'd2) ? sample_address :
+        (ss_off == 10'd3) ? sample_length :
+        (ss_off == 10'd4) ? bytes_remaining[7:0] :
+        (ss_off == 10'd5) ? {4'b0, bytes_remaining[11:8]} :
+        (ss_off == 10'd6) ? sample_buffer :
+        (ss_off == 10'd7) ? dmc_lsfr[7:0] :
+        (ss_off == 10'd8) ? {7'b0, dmc_lsfr[8]} :
+        (ss_off == 10'd9) ? dmc_volume_next :
+        (ss_off == 10'd10) ? {dmc_silence, have_buffer, dmc_clock, enable, enable_1, enable_2, enable_3, irq} :
+        (ss_off == 10'd11) ? sample_shift :
+        (ss_off == 10'd12) ? {5'b0, dmc_bits} :
+        (ss_off == 10'd13) ? dma_address[7:0] :
+        (ss_off == 10'd14) ? dma_address[15:8] : 8'h00;
     always_ff @(posedge clk) begin
         dma_address[15] <= 1;
         if (write) begin
@@ -658,11 +825,34 @@ module DmcChan (
             sample_length <= 0;
         end
 
+        if (ss_we) begin
+            case (ss_off)
+            10'd0: {irq_enable, loop, frequency} <= {ss_din[7:6], ss_din[3:0]};
+            10'd1: dmc_volume <= ss_din;
+            10'd2: sample_address <= ss_din;
+            10'd3: sample_length <= ss_din;
+            10'd4: bytes_remaining[7:0] <= ss_din;
+            10'd5: bytes_remaining[11:8] <= ss_din[3:0];
+            10'd6: sample_buffer <= ss_din;
+            10'd7: dmc_lsfr[7:0] <= ss_din;
+            10'd8: dmc_lsfr[8] <= ss_din[0];
+            10'd9: dmc_volume_next <= ss_din;
+            10'd10: {dmc_silence, have_buffer, dmc_clock, enable, enable_1, enable_2, enable_3, irq} <= ss_din;
+            10'd11: sample_shift <= ss_din;
+            10'd12: dmc_bits <= ss_din[2:0];
+            10'd13: dma_address[7:0] <= ss_din;
+            10'd14: dma_address[14:8] <= ss_din[6:0];
+            default: ;
+            endcase
+        end
+
     end
 
 endmodule
 
-module FrameCtr (
+module FrameCtr #(
+    parameter [9:0] SS_BASE = 10'h3F8
+) (
     input  logic clk,
     input  logic aclk1,
     input  logic aclk2,
@@ -678,7 +868,11 @@ module FrameCtr (
     output logic irq,
     output logic irq_flag,
     output logic frame_half,
-    output logic frame_quarter
+    output logic frame_quarter,
+    input  logic [9:0] ss_a,
+    input  logic [7:0] ss_din,
+    input  logic ss_we,
+    output logic [7:0] ss_dout
 );
 
     // NTSC -- Confirmed
@@ -729,6 +923,12 @@ module FrameCtr (
     assign frm_d = (PAL ? 15'b000_1011_1110_1000 : 15'b000_1010_0001_1111) == frame && ~seq_mode;
     assign frm_e = (PAL ? 15'b000_0100_1111_1010 : 15'b111_0001_1000_0101) == frame;
 
+    wire [9:0] ss_off = ss_a - SS_BASE;
+    assign ss_dout =
+        (ss_off == 10'd0) ? frame[7:0] :
+        (ss_off == 10'd1) ? {1'b0, frame[14:8]} :
+        (ss_off == 10'd2) ? {DisableFrameInterrupt, FrameSeqMode, FrameSeqMode_2, FrameInterrupt, frame_interrupt_buffer, frame_reset_2, w4017_2, w4017_1} : 8'h00;
+
     assign set_irq = frm_d & ~FrameSeqMode;
     assign frame_reset = frm_d | frm_e | w4017_2;
     assign frame_half = (frm_b | frm_d | frm_e | (w4017_2 & seq_mode));
@@ -774,11 +974,22 @@ module FrameCtr (
             if (cold_reset) FrameSeqMode <= 0; // Don't reset this on warm reset
             frame <= 15'h7FFF;
         end
+
+        if (ss_we) begin
+            case (ss_off)
+            10'd0: frame[7:0] <= ss_din;
+            10'd1: frame[14:8] <= ss_din[6:0];
+            10'd2: {DisableFrameInterrupt, FrameSeqMode, FrameSeqMode_2, FrameInterrupt, frame_interrupt_buffer, frame_reset_2, w4017_2, w4017_1} <= ss_din;
+            default: ;
+            endcase
+        end
     end
 
 endmodule
 
-module APU (
+module APU #(
+    parameter [9:0] SS_BASE = 10'h0D0
+) (
     input  logic        MMC5,
     input  logic        clk,
     input  logic        PHI2,
@@ -799,7 +1010,11 @@ module APU (
     output logic [15:0] Sample,
     output logic        DmaReq,         // 1 when DMC wants DMA
     output logic [15:0] DmaAddr,        // Address DMC wants to read
-    output logic        IRQ             // IRQ asserted high == asserted
+    output logic        IRQ,            // IRQ asserted high == asserted
+    input  logic [9:0]  ss_a,
+    input  logic [7:0]  ss_din,
+    input  logic        ss_we,
+    output logic [7:0]  ss_dout
 );
 
     logic [7:0] len_counter_lut[32];
@@ -862,6 +1077,13 @@ module APU (
     logic [4:0] enabled_buffer, enabled_buffer_1;
     assign Enabled = aclk1 ? enabled_buffer : enabled_buffer_1;
 
+    logic [7:0] ss_sq1_dout, ss_sq2_dout, ss_tri_dout, ss_noi_dout, ss_dmc_dout, ss_fc_dout;
+    wire [9:0] ss_off = ss_a - SS_BASE;
+    assign ss_dout = ss_sq1_dout | ss_sq2_dout | ss_tri_dout | ss_noi_dout | ss_dmc_dout | ss_fc_dout |
+        ((ss_off == 10'h58) ? {3'b0, enabled_buffer} :
+         (ss_off == 10'h59) ? {3'b0, enabled_buffer_1} :
+         (ss_off == 10'h5A) ? {7'b0, phi2_old} : 8'h00);
+
     always_ff @(posedge clk) begin
         phi2_old <= PHI2;
 
@@ -877,6 +1099,15 @@ module APU (
             enabled_buffer <= 0;
             enabled_buffer_1 <= 0;
         end
+
+        if (ss_we) begin
+            case (ss_off)
+            10'h58: enabled_buffer <= ss_din[4:0];
+            10'h59: enabled_buffer_1 <= ss_din[4:0];
+            10'h5A: phi2_old <= ss_din[0];
+            default: ;
+            endcase
+        end
     end
 
     logic frame_quarter, frame_half;
@@ -890,7 +1121,7 @@ module APU (
     assign IRQ = frame_irq || DmcIrq;
 
     // Generate each channel
-    SquareChan Squ1 (
+    SquareChan #(.SS_BASE(SS_BASE + 10'h00)) Squ1 (
         .MMC5         (MMC5),
         .clk          (clk),
         .ce           (ce),
@@ -909,10 +1140,11 @@ module APU (
         .odd_or_even  (odd_or_even),
         .Enabled      (Enabled[0]),
         .Sample       (Sq1Sample),
-        .IsNonZero    (Sq1NonZero)
+        .IsNonZero    (Sq1NonZero),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_sq1_dout)
     );
 
-    SquareChan Squ2 (
+    SquareChan #(.SS_BASE(SS_BASE + 10'h10)) Squ2 (
         .MMC5         (MMC5),
         .clk          (clk),
         .ce           (ce),
@@ -931,10 +1163,11 @@ module APU (
         .odd_or_even  (odd_or_even),
         .Enabled      (Enabled[1]),
         .Sample       (Sq2Sample),
-        .IsNonZero    (Sq2NonZero)
+        .IsNonZero    (Sq2NonZero),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_sq2_dout)
     );
 
-    TriangleChan Tri (
+    TriangleChan #(.SS_BASE(SS_BASE + 10'h20)) Tri (
         .clk          (clk),
         .phi1         (phi1),
         .aclk1        (aclk1),
@@ -950,10 +1183,11 @@ module APU (
         .LinCtr_Clock (ClkE),
         .Enabled      (Enabled[2]),
         .Sample       (TriSample),
-        .IsNonZero    (TriNonZero)
+        .IsNonZero    (TriNonZero),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_tri_dout)
     );
 
-    NoiseChan Noi (
+    NoiseChan #(.SS_BASE(SS_BASE + 10'h30)) Noi (
         .clk          (clk),
         .ce           (ce),
         .aclk1        (aclk1),
@@ -969,10 +1203,11 @@ module APU (
         .Env_Clock    (ClkE),
         .Enabled      (Enabled[3]),
         .Sample       (NoiSample),
-        .IsNonZero    (NoiNonZero)
+        .IsNonZero    (NoiNonZero),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_noi_dout)
     );
 
-    DmcChan Dmc (
+    DmcChan #(.SS_BASE(SS_BASE + 10'h40)) Dmc (
         .MMC5        (MMC5),
         .clk         (clk),
         .aclk1       (aclk1),
@@ -989,7 +1224,8 @@ module APU (
         .irq         (DmcIrq),
         .Sample      (DmcSample),
         .dma_req     (DmaReq),
-        .enable      (IsDmcActive)
+        .enable      (IsDmcActive),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_dmc_dout)
     );
 
     APUMixer mixer (
@@ -1001,7 +1237,7 @@ module APU (
         .sample       (Sample)
     );
 
-    FrameCtr frame_counter (
+    FrameCtr #(.SS_BASE(SS_BASE + 10'h50)) frame_counter (
         .clk          (clk),
         .aclk1        (aclk1),
         .aclk2        (aclk2),
@@ -1017,7 +1253,8 @@ module APU (
         .irq          (frame_irq),
         .irq_flag     (irq_flag),
         .frame_half   (frame_half),
-        .frame_quarter(frame_quarter)
+        .frame_quarter(frame_quarter),
+        .ss_a(ss_a), .ss_din(ss_din), .ss_we(ss_we), .ss_dout(ss_fc_dout)
     );
 
 endmodule
