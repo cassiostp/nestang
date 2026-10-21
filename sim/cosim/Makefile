@@ -27,7 +27,7 @@ CCACHE_OFF :=
 else
 CCACHE_OFF := -e CCACHE_DISABLE=1
 endif
-DOCKER := $(DOCKER_RUN) --user "$(shell id -u):$(shell id -g)" $(CCACHE_OFF)
+DOCKER := $(DOCKER_RUN) --name "$${SIM_PREFIX:-sim$$$$}_cosim" --user "$(shell id -u):$(shell id -g)" $(CCACHE_OFF)
 VMOUNT := -v "$(COSIM)/../..:/coresim-src:ro" -v "$(COSIM)/build:/coresim-build" -w /coresim-build
 VERILATOR := $(DOCKER) $(VMOUNT) verilator/verilator:latest
 IVERILOG := $(DOCKER) -v "$(COSIM)/../..:/coresim-src:ro" -v "$(COSIM)/build:/coresim-build" -w /coresim-build tangcore-iv:1

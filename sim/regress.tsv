@@ -1,0 +1,12 @@
+bench	tier	variants	runner	seconds	directory	command	rom	pre	post	group	container	notes
+cosim	quick	shared	host	1	cosim	make model && make lint					tangcore-iv:1 + verilator/verilator:latest (host wrapper)	Protocol model build and elaboration, not a game run
+saveram	quick	shared	iv	477	saveram	sh run.sh					tangcore-iv:1	""
+tmds	quick	shared	iv	164	tmds	sh run.sh					tangcore-iv:1	""
+scanlines_unit	quick	shared	iv	2	scanlines	iverilog -g2012 -o tb_scanlines_unit.out tb_scanlines.v ../../src/scanlines.v && vvp tb_scanlines_unit.out					tangcore-iv:1	""
+scanlines	full	standard,hz120	iv	45	scanlines	sh run.sh {variant}					tangcore-iv:1	""
+video_fx	full	standard	iv	300	video_fx	sh run.sh			python3 -I model.py check nes_fx.log		tangcore-iv:1	720p historical fixtures; hz120 is not applicable
+framelock	full	standard,hz120	host	600	framelock	sh run.sh {variant}			if [ {variant} = standard ]; then python3 check_audio.py build-standard/audio_hdmi_138k.hex build-standard/tb_138k.log build-standard/audio_hdmi_60k.hex build-standard/tb_60k.log; else python3 check_audio.py build-hz120/audio_hdmi_138k-hz120.hex build-hz120/tb_138k-hz120.log; fi		tangcore-iv:1 + verilator/verilator:latest (host wrapper)	""
+audio	quick	shared	iv	1	audio	sh run.sh					tangcore-iv:1	""
+mappers	quick	shared	iv	1	mappers	sh run.sh					tangcore-iv:1	""
+usb	full	shared	iv	300	usb	sh run.sh					tangcore-iv:1	""
+gamesave	quick	shared	host	69	gamesave	sh run.sh					verilator/verilator:latest (host wrapper)	""

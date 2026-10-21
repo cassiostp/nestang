@@ -78,3 +78,5 @@ not part of the repositories.
 - The 60K/138K difference is device + PLL family + USB, not logic: VRC support is compiled in for mega/console targets (`NESTANG_VRC`), smaller boards leave it out.
 - `buildall.bat` passes a controller arg for nano20k, which `build.tcl` ignores (nano supports both controllers at once).
 - The `*.gprj` files still point at old paths (`src/console60k/nestang.cst`, `src/primer25k/nestang.sdc`); `build.tcl` is the source of truth.
+
+Run `sh sim/regress.sh quick both` before handing work back; `quick` is the minimum check. Use `full both` for all benches, `--only bench1,bench2` to select, and `--list` for tiers, variants, images and typical times. At most two benches run together; logs and tables are in `sim/.regress/`. `TANGCORE_ROMS` defaults to `~/tangcore-test-bundle/test roms`; missing ROMs and unsupported variants SKIP. Keep ROM-derived output local.

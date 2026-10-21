@@ -22,7 +22,7 @@ sed -e '/^\toutput       prg_allow,$/d' "$src/src/mappers/generic.sv" > "$here/b
 ! grep -q "output       prg_allow," "$here/build/generic_sim.sv"
 test $(diff "$src/src/mappers/generic.sv" "$here/build/generic_sim.sv" | grep -c '^[<>]') -eq 1
 D=/src/src
-$DOCKER_RUN --user "$(id -u):$(id -g)" $CCACHE_OFF \
+$DOCKER_RUN --name "${SIM_PREFIX:-sim$$}_run" --user "$(id -u):$(id -g)" $CCACHE_OFF \
     -v "$src:/src:ro" -v "$here:/gs:ro" -v "$here/build:/out" -w /out \
     verilator/verilator:latest \
     --cc --exe --build -j "${JOBS:-$(nproc)}" --top-module nestang_top --public-flat-rw \
@@ -36,5 +36,5 @@ $DOCKER_RUN --user "$(id -u):$(id -g)" $CCACHE_OFF \
     $D/mappers/MMC1.sv $D/mappers/MMC2.sv $D/mappers/MMC3.sv $D/mappers/MMC5.sv $D/mappers/Namco.sv \
     $D/mappers/Sachen.sv $D/mappers/Sunsoft.sv $D/mappers/VRC.sv $D/verilator/eseopll_stub.v /gs/main.cpp > "$here/build/verilate.log" 2>&1 \
     || { tail -40 "$here/build/verilate.log"; exit 1; }
-    $DOCKER_RUN --user "$(id -u):$(id -g)" -v "$here/build:/out" -w /out --entrypoint /out/obj/gamesave \
+    $DOCKER_RUN --name "${SIM_PREFIX:-sim$$}_run" --user "$(id -u):$(id -g)" -v "$here/build:/out" -w /out --entrypoint /out/obj/gamesave \
     verilator/verilator:latest +rom=/out/game.hex +size=$size
