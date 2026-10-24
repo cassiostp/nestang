@@ -218,6 +218,9 @@ set_option -use_i2c_as_gpio 1
 set_option -use_cpu_as_gpio 1
 set_option -use_sspi_as_gpio 1
 set_option -multi_boot 1
-set_option -place_option 2
+# place 0 + route 0: the fastest place/route pair here, with at least
+# +10 % timing margin on both variants (tangcore#67)
+set_option -place_option 0
+set_option -route_option 0
 
 run all
